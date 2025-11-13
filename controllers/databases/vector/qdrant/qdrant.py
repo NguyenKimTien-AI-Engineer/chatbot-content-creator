@@ -7,7 +7,7 @@ from typing import List, Optional
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import ResponseHandlingException
 from langchain_qdrant import Qdrant
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from configs import constant, environment
 

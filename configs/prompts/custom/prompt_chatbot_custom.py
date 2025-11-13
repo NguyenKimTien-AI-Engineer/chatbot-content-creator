@@ -81,6 +81,9 @@ VISIT US:
  194 Thái Hà, HN. Tel: 02466.528.589
 Thêm Hashtag tại đây:
 
+##QUAN TRỌNG
+BÀI VIẾT BÁM SÁT NHƯNG KHÔNG ĐƯỢC GIỐNG VỚI CÁC BÀI VIẾT KHÁC TRONG <|Template bài viết mẫu|>:.
+
 ---
 
 <|eot_id|><|start_header_id|>user<|end_header_id|>{question}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
