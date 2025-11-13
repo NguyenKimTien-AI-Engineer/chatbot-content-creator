@@ -1,0 +1,86 @@
+PHÂN TÍCH API UPLOAD FILES
+===============================
+
+1. Thông tin chung
+-----------------
+- Endpoint: /v1/upload-files
+- Method: POST
+- Xử lý: Nhận file upload hoặc URL và lưu vào vector database
+
+2. Input Parameters
+-----------------
+- user_id: ID người dùng (optional, Form data)
+- file: File upload (optional, File)
+- url: URL của file (optional, Form data) 
+- language: Ngôn ngữ xử lý (optional, Form data, default: "vie+eng")
+- note: Ghi chú (optional, Form data)
+
+3. Luồng xử lý chính
+-------------------
+3.1. Khởi tạo
+- Tạo biến file_path rỗng để theo dõi đường dẫn file
+- Xác định đường dẫn cơ sở: constant.DATA + "/" + constant.CHATBOT_NAME
+
+3.2. Xử lý tên file
+- Nếu có URL:
+  + Tách tên và phần mở rộng từ URL
+  + Tạo tên file mới: {name}.{extension}
+- Nếu có file upload:
+  + Lấy tên file trực tiếp từ file.filename
+
+3.3. Kiểm tra trùng lặp
+- Gọi hàm check_all_data_upload() để kiểm tra file đã tồn tại
+- Nếu trùng lặp:
+  + Trả về response 200 với thông báo file đã tồn tại
+  + Tự động copy file cho user_id hiện tại
+
+3.4. Xử lý lưu file
+- Trường hợp URL:
+  + Tạo đường dẫn đầy đủ
+  + Download file từ URL bằng hàm download_file_from_url()
+- Trường hợp file upload:
+  + Đọc nội dung file
+  + Tạo thư mục user nếu chưa tồn tại
+  + Lưu file theo chunks (1MB) để tối ưu bộ nhớ
+  + Thêm delay 0.01s giữa các chunks
+
+3.5. Xử lý vector database
+- Sử dụng asyncio.get_event_loop() để xử lý bất đồng bộ
+- Gọi hàm save_vector_db() để lưu dữ liệu vào vector database
+- Tham số: user_id, file_path, note, language
+
+3.6. Xử lý response
+- Nếu lưu thành công:
+  + Trả về status 200 với data và thông báo thành công
+- Nếu thất bại:
+  + Trả về status 400 với thông báo lỗi
+
+3.7. Cleanup
+- Trong block finally:
+  + Nếu là file upload (không phải URL)
+  + Xóa file tạm đã lưu bằng hàm remove_file()
+
+4. Xử lý lỗi
+-----------
+- Try-catch bao quanh toàn bộ logic chính
+- Ghi log lỗi qua print()
+- Trả về response 400 với thông báo lỗi cụ thể
+
+5. Điểm đặc biệt
+---------------
+- Hỗ trợ cả upload file trực tiếp và download từ URL
+- Xử lý bất đồng bộ với asyncio
+- Lưu file theo chunks để tối ưu memory
+- Tự động xóa file tạm sau khi xử lý
+- Kiểm tra trùng lặp để tránh lưu file không cần thiết
+- Tích hợp với vector database để phục vụ tìm kiếm
+
+6. Cải tiến có thể thực hiện
+--------------------------
+- Thêm validation cho các input parameters
+- Giới hạn kích thước file upload
+- Thêm whitelist cho các định dạng file được phép
+- Tối ưu hóa thời gian delay giữa các chunks
+- Thêm retry mechanism cho download URL
+- Logging chi tiết hơn cho việc debug
+- Thêm progress tracking cho quá trình upload/download
