@@ -9,12 +9,10 @@ import pandas as pd
 import requests
 import ast
 from bs4 import BeautifulSoup
-import os
 
 
 from configs import constant
 
-url_upload_file = f"{constant.SERVER_ADDRESS}/api/v1/upload-files"
 url_read_collections_user = f"{constant.SERVER_ADDRESS}/api/v1/qdrant/collections/user"
 url_read_all_collections = f"{constant.SERVER_ADDRESS}/api/v1/qdrant/collections/all"
  
@@ -57,28 +55,6 @@ async def api_get_all_collections():
     except Exception as e:
         print(f"An error api_get_year: {str(e)}")
         return []
-
-
-async def upload_file(user_id, file):
-    try:
-        with st.spinner(f"Đang xử lý tệp {file.name}..."):
-            files = {"file": (file.name, file, file.type)}
-            data = {"user_id": user_id}
-            response = requests.post(url_upload_file, files=files, data=data, timeout=timeout)
-
-            if response.status_code == 200:
-                data = response.json().get("data", "")
-                st.session_state.file_content = data
-                st.sidebar.success(f"Tệp {file.name} đã được tải lên.")
-
-                st.rerun()
-            else:
-                error_message = response.json().get("message", "Unknown error.")
-                print(f"Failed to upload file: {error_message}")
-                st.sidebar.warning(f"Lỗi trong quá trình tải lên.")
-
-    except Exception as e:
-        print(f"An error occurred during upload: {str(e)}")
 
 
 async def call_chatbot_api(user_id, query, collections, session_id, history_id, chatbot_type):
@@ -312,22 +288,6 @@ def main():
         session_id = generate_random_history_id()
         st.session_state.session_id = session_id
 
-    # with st.sidebar:
-    #     st.sidebar.title("Thiết lập cấu hình")
-    #     user_id = st.sidebar.text_input(
-    #         "User ID:",
-    #         value="MekongTienAI",
-    #         placeholder="Nhập User ID của bạn"
-    #     )
-    #     st.session_state.user_id = user_id
-
-    #     st.session_state.ref_toggle = False
-
-    #     # Đã loại bỏ: toggle hiển thị câu hỏi gợi ý
-
-
-    # Đã loại bỏ: phần chọn/tải sản phẩm trên sidebar
-
     # Hiển thị nội dung chat trước đó
     for message in st.session_state.messages:
         icon = "./resources/icon/user.png" if message["role"] == "user" else "./resources/icon/bot.png"
@@ -398,8 +358,6 @@ def main():
         elif message["content"]:
             with st.chat_message(message["role"], avatar=icon):
                 st.write(message["content"])
-
-    # Đã loại bỏ: hiển thị danh sách câu hỏi gợi ý
 
     # Add custom CSS for enhanced UI
     st.markdown("""
@@ -510,6 +468,3 @@ def send_message(user_id, query, collections, session_id, history_id):
 
             st.session_state.is_typing = False
             st.rerun()
-
-#if __name__ == "__main__":
-#     main()

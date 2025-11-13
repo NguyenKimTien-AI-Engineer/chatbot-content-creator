@@ -16,7 +16,7 @@ from controllers.llm import token as _token
 from controllers.rag import retriever
 from controllers.ultils import time as time_utils
 from controllers.modules import reference
-from controllers.databases.nosql.mongodb import MongoDBManager
+from controllers.databases.nosql.mongodb import MongoDBManager, get_mongodb_manager
 
 from configs import environment, constant
 from configs.prompts.custom import prompt_chatbot_custom, template_content, checklist, system
@@ -339,6 +339,17 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
 
         ans_ref = ""
 
+        # Lưu lịch sử: khởi tạo hội thoại và ghi message của user
+        try:
+            db = await get_mongodb_manager()
+            await db.create_conversation(str(session_id), str(user_id), {
+                "role": "user",
+                "content": str(query),
+                "metadata": {"collections": collections}
+            }, metadata={"history_id": str(history_id)})
+        except Exception as db_err:
+            print(f"[History] create_conversation error: {db_err}")
+
         async for chunk in chain.astream(message):
             if "📑" in chunk:
                 stop_yielding = True
@@ -360,6 +371,17 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         yield json.dumps({"metadata": {"reference": filter_references}})
 
         answer = clean.clean_special_characters(answer)
+
+        # Ghi message assistant vào histories
+        try:
+            db = await get_mongodb_manager()
+            await db.append_message(str(session_id), {
+                "role": "assistant",
+                "content": str(answer),
+                "metadata": {"reference": filter_references}
+            })
+        except Exception as db_err2:
+            print(f"[History] append_message error: {db_err2}")
 
         threading.Thread(
             target=_history.save_history,
@@ -460,6 +482,25 @@ def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, i
         target=_history.save_history,
         args=(user_id, history_id, session_id, query, answer, "", "", references, ""),
     ).start()
+
+    # Lưu lịch sử vào MongoDB (non-stream)
+    try:
+        loop2 = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop2)
+        db = loop2.run_until_complete(get_mongodb_manager())
+        loop2.run_until_complete(db.create_conversation(str(session_id), str(user_id), {
+            "role": "user",
+            "content": str(query),
+            "metadata": {"collections": collections}
+        }, metadata={"history_id": str(history_id)}))
+        loop2.run_until_complete(db.append_message(str(session_id), {
+            "role": "assistant",
+            "content": str(answer),
+            "metadata": {"reference": filter_references}
+        }))
+        loop2.close()
+    except Exception as db_err3:
+        print(f"[History] non-stream write error: {db_err3}")
 
     num_tokens_output = _token.calculate_tokens(answer, model=constant.MODEL_CHATBOT_CUSTOM_PROMPT, name="chatbot_custom_prompt")
     response_time = time.time() - start_time

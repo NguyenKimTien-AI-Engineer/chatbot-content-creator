@@ -1,29 +1,511 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Sparkles, MoreVertical, Smile } from "lucide-react";
+import { Send, Bot, Smile } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
+import Image from "next/image";
 import { Header } from "@/components/layout/header";
 import { SidebarProvider } from "@/components/ui/sidebar";
 
-interface Message {
+type Role = "user" | "assistant" | "chart" | "reference";
+
+interface ChatMessage {
   id: string;
-  text: string;
-  sender: "user" | "bot";
-  timestamp: Date;
+  role: Role;
+  content: string | any;
+  timestamp: number;
+}
+
+const DEFAULT_COLLECTION = "CHATBOT_MekongAI_d41b1532-bf75-481d-ad6d-b7dac8cbae4d";
+const CHART_SENTINEL = "### === GENERATE CHART === ###";
+
+function generateRandomHistoryId(length = 15) {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function fixLinksInHtml(rawHtml: string): string {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, "text/html");
+    const nodes = doc.querySelectorAll("group-link");
+    nodes.forEach((group) => {
+      const details = doc.createElement("details");
+      const summary = doc.createElement("summary");
+      summary.textContent = "📑";
+      const div = doc.createElement("div");
+      const ul = doc.createElement("ul");
+      ul.style.listStyleType = "none";
+      ul.style.paddingTop = "7px";
+      ul.style.paddingBottom = "5px";
+      ul.style.margin = "10px 0";
+      ul.style.backgroundColor = "#f7f7f7";
+      ul.style.borderRadius = "5px";
+      group.querySelectorAll("a").forEach((a) => {
+        const li = doc.createElement("li");
+        li.style.marginBottom = "5px";
+        const newA = doc.createElement("a");
+        newA.href = a.getAttribute("href") || "#";
+        newA.target = "_blank";
+        newA.textContent = a.textContent || "link";
+        newA.style.textDecoration = "none";
+        newA.style.color = "#0068c9";
+        li.appendChild(newA);
+        ul.appendChild(li);
+      });
+      div.appendChild(ul);
+      details.appendChild(summary);
+      details.appendChild(div);
+      group.replaceWith(details);
+    });
+    return doc.body.innerHTML;
+  } catch (e) {
+    return rawHtml;
+  }
+}
+// Format assistant text into rich HTML: bold first line (title), convert bullet/numbered lines into lists, keep inline icons/emojis if present.
+function formatAssistantHtml(raw: string): string {
+  try {
+    const normalized = String(raw || "").replace(/\r\n/g, "\n");
+    if (!normalized.trim()) return "";
+
+    const firstBreak = normalized.indexOf("\n");
+    const head = (firstBreak >= 0 ? normalized.slice(0, firstBreak) : normalized).trim();
+    const tail = firstBreak >= 0 ? normalized.slice(firstBreak + 1) : "";
+
+    const boldInline = (s: string) =>
+      s
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/_(.+?)_/g, "<em>$1</em>")
+        .replace(/`([^`]+?)`/g, "<code class=\"px-1 py-0.5 bg-gray-100 rounded\">$1</code>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">$1<\/a>');
+
+    let html = "";
+    if (head) {
+      html += `<div class="font-semibold text-gray-900 mb-2 flex items-center gap-2">${boldInline(head)}</div>`;
+    }
+
+    const lines = tail.split("\n");
+    const bulletRegex = /^(?:[-*•]|–)\s+/;
+    const numRegex = /^\d+[\).\s]+/;
+    let inUl = false;
+    let inOl = false;
+
+    const closeLists = () => {
+      if (inUl) { html += "</ul>"; inUl = false; }
+      if (inOl) { html += "</ol>"; inOl = false; }
+    };
+
+    // Extended helpers and states for richer formatting
+    const escapeHtml = (s: string) =>
+      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const labelIcon = (label: string) => {
+      switch (label.toLowerCase()) {
+        case "group": return "👥";
+        case "fanpage": return "📄";
+        case "website": return "🌐";
+        case "facebook": return "📘";
+        case "tiktok": return "🎵";
+        case "youtube": return "▶️";
+        case "zalo": return "💬";
+        case "shopee": return "🛍️";
+        case "lazada": return "🛒";
+        case "hotline": return "☎️";
+        case "email": return "✉️";
+        default: return "🔗";
+      }
+    };
+
+    let inCode = false;
+    let codeBuffer: string[] = [];
+    let inTable = false;
+    let tableRows: string[][] = [];
+
+    // Ordered list extras: alpha and roman numerals
+    const alphaRegex = /^[A-Za-z][\).\s]+/;
+    const romanRegex = /^(?=[IVXLCDM])[IVXLCDM]+[\).\s]+/;
+
+    // Heuristic to decide if a line `Key: Value` is a true KV pair
+    const looksLikeKeyValue = (k: string, v: string) => {
+      const key = k.trim();
+      const wordCount = key.split(/\s+/).filter(Boolean).length;
+      if (wordCount > 6) return false; // too long -> likely a sentence
+      if (key.length > 40) return false; // overly long key
+      if (/[.!?…]$/.test(key)) return false; // sentence-like endings
+      return true;
+    };
+
+    // Key-Value pairs accumulator
+    let inKV = false;
+    let kvRows: Array<[string, string]> = [];
+    const flushKV = () => {
+      if (!inKV || kvRows.length === 0) return;
+      if (kvRows.length >= 2) {
+        html += `<div class="overflow-x-auto mb-2"><table class="min-w-full text-sm border border-gray-200 rounded">`;
+        html += `<tbody>` + kvRows.map(([k, v]) => `<tr><td class="px-3 py-2 border-b font-medium text-gray-900">${escapeHtml(k)}</td><td class="px-3 py-2 border-b">${boldInline(escapeHtml(v))}</td></tr>`).join("") + `</tbody>`;
+        html += `</table></div>`;
+      } else {
+        const [k, v] = kvRows[0];
+        html += `<p class="mb-2"><strong>${escapeHtml(k)}:</strong> ${boldInline(escapeHtml(v))}</p>`;
+      }
+      inKV = false;
+      kvRows = [];
+    };
+
+    // Callout blocks :::info|warning|success|note ... :::
+    let inCallout = false;
+    let calloutType: string | null = null;
+    let calloutBuffer: string[] = [];
+    const flushCallout = () => {
+      if (!inCallout) return;
+      const type = String(calloutType || 'info').toLowerCase();
+      const map = {
+        info: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-800', icon: 'ℹ️' },
+        warning: { bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-800', icon: '⚠️' },
+        success: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800', icon: '✅' },
+        note: { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', icon: '📝' },
+      } as const;
+      const style = (map as any)[type] || map.info;
+      html += `<div class="rounded-md ${style.bg} ${style.border} ${style.text} border p-3 mb-2"><div class="flex items-start gap-2"><span>${style.icon}</span><div>` + calloutBuffer.map((l) => `<p class="mb-1">${boldInline(escapeHtml(l))}</p>`).join("") + `</div></div></div>`;
+      inCallout = false;
+      calloutType = null;
+      calloutBuffer = [];
+    };
+
+    const flushCode = () => {
+      if (inCode) {
+        html += `<pre class="bg-gray-50 border border-gray-200 rounded p-3 overflow-auto text-xs mb-2"><code>${escapeHtml(codeBuffer.join("\n"))}</code></pre>`;
+        inCode = false;
+        codeBuffer = [];
+      }
+    };
+
+    const flushTable = () => {
+      if (!inTable || tableRows.length === 0) return;
+      const isHeaderSep = tableRows.length > 1 && tableRows[1].every((c) => /^-+$/.test(c));
+      const header = isHeaderSep ? tableRows[0] : null;
+      const bodyRows = isHeaderSep ? tableRows.slice(2) : tableRows;
+      html += `<div class="overflow-x-auto mb-2"><table class="min-w-full text-sm border border-gray-200 rounded">`;
+      if (header) {
+        html += `<thead class="bg-gray-50"><tr>` + header.map((h) => `<th class="text-left px-3 py-2 border-b">${escapeHtml(h)}</th>`).join("") + `</tr></thead>`;
+      }
+      html += `<tbody>` + bodyRows.map((row) => `<tr>` + row.map((c) => `<td class="px-3 py-2 border-b">${escapeHtml(c)}</td>`).join("") + `</tr>`).join("") + `</tbody>`;
+      html += `</table></div>`;
+      inTable = false;
+      tableRows = [];
+    };
+
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      // Normalize stray tabs in inline content (outside code blocks)
+      const tNorm = t.replace(/\t+/g, " ");
+      // Handle full-line bold like `** Tiêu đề \t **`
+      const fullBold = tNorm.match(/^\*\*\s*(.*?)\s*\*\*$/);
+      if (fullBold) { closeLists(); flushCode(); flushTable(); flushKV(); html += `<div class="font-semibold text-gray-900 mt-2 mb-1">${escapeHtml(fullBold[1])}</div>`; continue; }
+      // Callout fences
+      const calloutOpen = tNorm.match(/^:::(info|warning|success|note)$/i);
+      if (calloutOpen) { closeLists(); flushCode(); flushTable(); flushKV(); inCallout = true; calloutType = calloutOpen[1].toLowerCase(); calloutBuffer = []; continue; }
+      if (tNorm === ':::') { closeLists(); flushCode(); flushTable(); flushKV(); flushCallout(); continue; }
+      if (inCallout) { calloutBuffer.push(line); continue; }
+      // Code fences ```
+      if (/^```/.test(tNorm)) {
+        closeLists(); flushTable(); flushKV();
+        if (!inCode) { inCode = true; codeBuffer = []; } else { flushCode(); }
+        continue;
+      }
+      if (inCode) { codeBuffer.push(line); continue; }
+      // Horizontal rule
+      if (/^-{3,}$/.test(tNorm) || tNorm === "—") { closeLists(); flushTable(); flushKV(); html += `<hr class="my-3 border-gray-200"/>`; continue; }
+      // Blockquote
+      if (/^>\s+/.test(tNorm)) { closeLists(); flushTable(); flushKV(); html += `<blockquote class="border-l-4 border-gray-300 pl-3 text-gray-700 italic mb-2">${boldInline(tNorm.replace(/^>\s+/, ""))}</blockquote>`; continue; }
+      // Headings #, ##, ###
+      const hMatch = tNorm.match(/^(#{1,3})\s+(.*)$/);
+      if (hMatch) {
+        closeLists(); flushTable(); flushKV();
+        const level = Math.min(hMatch[1].length + 2, 6);
+        html += `<h${level} class="font-semibold text-gray-900 mt-2 mb-1">${boldInline(hMatch[2])}</h${level}>`;
+        continue;
+      }
+      // Labelled chips
+      const labelMatch = tNorm.match(/^(Group|Fanpage|Website|Facebook|TikTok|YouTube|Zalo|Shopee|Lazada|Shop|Hotline|Email):\s*(.+)$/i);
+      if (labelMatch) {
+        closeLists(); flushTable(); flushKV();
+        const label = labelMatch[1];
+        const value = labelMatch[2].trim();
+        const urlMatch = value.match(/https?:\/\/\S+/);
+        const url = urlMatch ? urlMatch[0] : null;
+        const chip = (content: string) => `<span class=\"inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-800 text-xs mr-1\">${labelIcon(label)}<span>${content}</span></span>`;
+        if (url) {
+          html += `<div class=\"mb-2\"><a href=\"${url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"no-underline\">${chip(label)}</a></div>`;
+        } else if (/^\S+@\S+\.\S+$/.test(value) && label.toLowerCase() === "email") {
+          const mail = escapeHtml(value);
+          html += `<div class=\"mb-2\"><a href=\"mailto:${mail}\" class=\"no-underline\">${chip(label)}</a></div>`;
+        } else {
+          html += `<div class=\"mb-2\">${chip(`${label}: ${escapeHtml(value)}`)}</div>`;
+        }
+        continue;
+      }
+      // Image line ![alt](url)
+      const imgMatch = tNorm.match(/^!\[([^\]]*)\]\((https?:\/\/[^)]+)\)\s*$/);
+      if (imgMatch) { closeLists(); flushCode(); flushTable(); flushKV(); const alt = escapeHtml(imgMatch[1] || ""); const url = imgMatch[2]; html += `<figure class="mb-2"><img src="${url}" alt="${alt}" class="max-w-full rounded border border-gray-200"/>` + (alt ? `<figcaption class="text-xs text-gray-500 mt-1">${alt}</figcaption>` : ``) + `</figure>`; continue; }
+      // Lists
+      if (bulletRegex.test(tNorm)) {
+        flushTable();
+        if (!inUl) { closeLists(); html += '<ul class=\"list-disc pl-5 space-y-1\">'; inUl = true; }
+        const content = tNorm.replace(bulletRegex, "");
+        const cbMatch = content.match(/^\[(x|X|\s)\]\s*(.*)$/);
+        if (cbMatch) {
+          const checked = /x|X/.test(cbMatch[1]);
+          html += `<li class=\"flex items-start gap-2\"><input type=\"checkbox\" disabled ${checked ? "checked" : ""} class=\"mt-1\"/>${boldInline(cbMatch[2])}</li>`;
+        } else {
+          html += `<li>${boldInline(content)}</li>`;
+        }
+        continue;
+      }
+      const isOrdered = numRegex.test(tNorm) || alphaRegex.test(tNorm) || romanRegex.test(tNorm);
+      if (isOrdered) {
+        flushTable();
+        if (!inOl) { closeLists(); html += '<ol class=\"list-decimal pl-5 space-y-1\">'; inOl = true; }
+        const stripped = tNorm.replace(numRegex, "").replace(alphaRegex, "").replace(romanRegex, "");
+        html += `<li>${boldInline(stripped)}</li>`;
+        continue;
+      }
+      // Markdown table row
+      if (/^\|.*\|$/.test(tNorm)) {
+        closeLists(); flushCode(); flushKV();
+        const cols = tNorm.slice(1, -1).split("|").map((c) => c.trim());
+        if (!inTable) { inTable = true; tableRows = []; }
+        tableRows.push(cols);
+        continue;
+      } else if (inTable) {
+        flushTable();
+      }
+      // Key-Value row (generic)
+      const kvMatch = tNorm.match(/^([^:]{2,}):\s*(.+)$/);
+      if (kvMatch) {
+        const key = kvMatch[1].trim();
+        const val = kvMatch[2].trim();
+        if (looksLikeKeyValue(key, val)) {
+          closeLists(); flushCode(); flushTable();
+          inKV = true;
+          kvRows.push([key, val]);
+          continue;
+        }
+        // If not a true KV pair, fall through to normal paragraph rendering
+      } else if (inKV) {
+        flushKV();
+      }
+      // Subheading ending with ':'
+      if (/^[^:]{2,}:$/.test(tNorm)) { closeLists(); flushTable(); flushKV(); html += `<div class=\"font-semibold text-gray-900 mt-2 mb-1\">${boldInline(tNorm)}</div>`; continue; }
+      // Hashtags line -> chips
+      const tags = tNorm.match(/#[^\s#]+/g);
+      if (tags && tags.length >= 2) {
+        closeLists(); flushTable(); flushKV();
+        html += `<div class=\"flex flex-wrap gap-1 mb-2\">` + tags.map((tag) => `<span class=\"px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs\">${escapeHtml(tag)}</span>`).join("") + `</div>`;
+        continue;
+      }
+      // Default paragraph
+      closeLists(); flushTable(); flushKV();
+      html += `<p class=\"mb-2\">${boldInline(tNorm)}</p>`;
+    }
+    closeLists(); flushCode(); flushTable(); flushKV(); flushCallout();
+
+    return fixLinksInHtml(html);
+  } catch {
+    return fixLinksInHtml(String(raw || "").replace(/\n/g, "<br/>"));
+  }
+}
+
+function getApiPaths(path: string) {
+  const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
+  let base = apiUrl;
+  if (!base) {
+    const host = process.env.NEXT_PUBLIC_SERVER_HOST || "localhost";
+    const port = process.env.NEXT_PUBLIC_API_PORT || "1945";
+    base = `http://${host}:${port}`;
+  }
+  return {
+    relative: path,
+    absolute: base ? `${base}${path}` : null,
+  };
+}
+
+async function writeChart(userId: string, query: string, context: string): Promise<string | null> {
+  try {
+    const paths = getApiPaths("/api/v1/chart");
+    let res: Response | null = null;
+    try {
+      res = await fetch(paths.relative, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId || "default", query, context }),
+      });
+    } catch (e) {
+      if (paths.absolute) {
+        res = await fetch(paths.absolute, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId || "default", query, context }),
+        });
+      } else {
+        throw e;
+      }
+    }
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.data || null;
+  } catch (e) {
+    console.error("writeChart error", e);
+    return null;
+  }
+}
+
+type ChatbotType = "reference" | "chart";
+
+async function streamChat(
+  chatbotType: ChatbotType,
+  payload: any,
+  onChunk: (text: string) => void,
+  onGenerateChartFlag: () => void,
+  onMeta: (metadata: any) => void
+) {
+  const pathStream = chatbotType === "chart" ? "/api/v1/chatbot-chart-stream" : "/api/v1/chatbot-custom-prompt-stream";
+  const pathsStream = getApiPaths(pathStream);
+  let res: Response | null = null;
+  // Prefer absolute to avoid proxy buffering; fallback to relative
+  if (pathsStream.absolute) {
+    try {
+      res = await fetch(pathsStream.absolute, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream,application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      // try relative as fallback
+      try {
+        res = await fetch(pathsStream.relative, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "text/event-stream,application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (ee) {
+        res = null;
+      }
+    }
+  } else {
+    try {
+      res = await fetch(pathsStream.relative, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream,application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      res = null;
+    }
+  }
+
+  if (!res || !res.ok) {
+    // Fallback: try non-stream endpoint to avoid breaking UX
+    try {
+      const pathNonStream = chatbotType === "chart" ? "/api/v1/chatbot-chart" : "/api/v1/chatbot-custom-prompt";
+      const pathsNon = getApiPaths(pathNonStream);
+      let nonRes: Response | null = null;
+      try {
+        nonRes = await fetch(pathsNon.relative, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (e) {
+        if (pathsNon.absolute) {
+          nonRes = await fetch(pathsNon.absolute, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          throw e;
+        }
+      }
+      if (!nonRes.ok) {
+        const errText = await nonRes.text();
+        console.warn("Fallback error:", errText);
+        onChunk("Xin lỗi, hệ thống đang gặp sự cố và chưa thể trả lời.");
+        return;
+      }
+      const data = await nonRes.json();
+      const answer = data?.data?.answer ?? data?.data ?? "";
+      const reference = data?.data?.reference ?? null;
+      if (answer) onChunk(String(answer));
+      if (reference) onMeta({ reference });
+      return;
+    } catch (e) {
+      console.warn("Stream fallback failed", e);
+      onChunk("Xin lỗi, hệ thống đang gặp sự cố và chưa thể trả lời.");
+      return;
+    }
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const text = await res.text();
+    onChunk(text);
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let bufferMeta = "";
+  let metaStarted = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (!chunk) continue;
+    const trimmed = chunk.trim();
+
+    // Detect metadata JSON anywhere in the chunk and separate it from content
+    const metaIdx = chunk.indexOf('{"metadata"');
+    if (metaIdx >= 0) {
+      const before = chunk.slice(0, metaIdx);
+      if (before.trim()) onChunk(before);
+      metaStarted = true;
+      bufferMeta += chunk.slice(metaIdx);
+      continue;
+    }
+    if (metaStarted) {
+      bufferMeta += chunk;
+      continue;
+    }
+    if (chunk.includes(CHART_SENTINEL)) {
+      onGenerateChartFlag();
+      continue;
+    }
+    onChunk(chunk);
+  }
+
+  if (bufferMeta) {
+    try {
+      const parsed = JSON.parse(bufferMeta);
+      if (parsed?.metadata) onMeta(parsed.metadata);
+    } catch (e) {
+      console.warn("Failed to parse metadata", e);
+    }
+  }
 }
 
 export default function ModernChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      text: "Xin chào! Tôi có thể giúp gì cho bạn hôm nay?",
-      sender: "bot",
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [refToggle, setRefToggle] = useState(false);
+  const [sessionId, setSessionId] = useState("");
+  const [userId] = useState<string>("default");
+  const [pendingChart, setPendingChart] = useState(false);
+  const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -35,31 +517,106 @@ export default function ModernChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = () => {
+  useEffect(() => {
+    if (!sessionId) setSessionId(generateRandomHistoryId());
+  }, [sessionId]);
+
+  const handleSendMessage = async () => {
     if (input.trim() === "") return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: input,
-      sender: "user",
-      timestamp: new Date(),
+    const now = Date.now();
+    const userMessage: ChatMessage = {
+      id: now.toString(),
+      role: "user",
+      content: input,
+      timestamp: now,
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsTyping(true);
+    setPendingChart(false);
 
-    // Simulate bot response
-    setTimeout(() => {
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: "Cảm ơn bạn đã gửi tin nhắn! Đây là phản hồi mẫu từ AI Assistant.",
-        sender: "bot",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, botMessage]);
-      setIsTyping(false);
-    }, 1500);
+    const queryLower = String(userMessage.content).toLowerCase();
+    let chatbotType: ChatbotType = "reference";
+    const chartKeywords = [
+      "phân tích", "so sánh", "phân loại", "thống kê", "biểu đồ", "vẽ", "chart", "draw",
+    ];
+    if (chartKeywords.some((kw) => queryLower.includes(kw))) {
+      chatbotType = "chart";
+    }
+
+    const payload = {
+      user_id: userId,
+      query: userMessage.content,
+      collections: [DEFAULT_COLLECTION],
+      session_id: sessionId,
+      history_id: "",
+      include_products: true,
+    };
+
+    const assistantId = (Date.now() + 1).toString();
+    assistantStreamingIdRef.current = assistantId;
+
+    let fullAnswer = "";
+    await streamChat(
+      chatbotType,
+      payload,
+      (chunk) => {
+        fullAnswer += chunk;
+        setMessages((prev) => {
+          const exists = prev.some((m) => m.id === assistantId && m.role === "assistant");
+          if (!exists) {
+            return [
+              ...prev,
+              { id: assistantId, role: "assistant", content: fullAnswer, timestamp: Date.now() },
+            ];
+          }
+          return prev.map((m) => (m.id === assistantId && m.role === "assistant") ? { ...m, content: fullAnswer } : m);
+        });
+      },
+      () => {
+        setPendingChart(true);
+        const updatedContent = `${fullAnswer}\n\nBiểu đồ đang được tạo. Vui lòng đợi trong giây lát...`;
+        setMessages((prev) => {
+          const exists = prev.some((m) => m.id === assistantId && m.role === "assistant");
+          if (!exists) {
+            return [
+              ...prev,
+              { id: assistantId, role: "assistant", content: updatedContent, timestamp: Date.now() },
+            ];
+          }
+          return prev.map((m) => (m.id === assistantId && m.role === "assistant") ? { ...m, content: updatedContent } : m);
+        });
+      },
+      (metadata) => {
+        // Append reference or chart metadata entries
+        if (metadata?.reference) {
+          setMessages((prev) => [
+            ...prev,
+            { id: `${Date.now()}-ref`, role: "reference", content: metadata.reference, timestamp: Date.now() },
+          ]);
+        }
+        if (metadata?.chart) {
+          setMessages((prev) => [
+            ...prev,
+            { id: `${Date.now()}-chartmeta`, role: "chart", content: metadata.chart, timestamp: Date.now() },
+          ]);
+        }
+      }
+    );
+
+    if (chatbotType === "chart") {
+      const chartHtml = await writeChart(userId, String(userMessage.content), fullAnswer);
+      if (chartHtml) {
+        setMessages((prev) => [
+          ...prev,
+          { id: `${Date.now()}-chart`, role: "chart", content: chartHtml, timestamp: Date.now() },
+        ]);
+      }
+    }
+
+    setIsTyping(false);
   };
 
   const formatTime = (date: Date) => {
@@ -79,53 +636,114 @@ export default function ModernChatPage() {
           {/* Header */}
           <Header />
 
-          {/* Messages Area */}
+          {/* Messages / Empty State */}
+          {messages.length === 0 ? (
+            <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
+              <div className="max-w-2xl w-full mx-auto flex flex-col items-center">
+                <h1 className="text-5xl font-semibold tracking-tight text-gray-900 mb-6 select-none">MEKONGAI</h1>
+                <div className="relative flex items-center gap-2 w-full">
+                  <div className="relative flex-1">
+                    <input
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                      placeholder="Bạn muốn biết điều gì?"
+                      className="w-full px-5 py-3.5 pr-12 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                    />
+                    <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                      <Smile className="w-5 h-5 text-gray-400" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!input.trim()}
+                    className="flex-shrink-0 bg-black hover:bg-gray-800 disabled:bg-gray-300 text-white p-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all disabled:cursor-not-allowed"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 text-center mt-3">
+                  AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
+                </p>
+              </div>
+            </main>
+          ) : (
           <main className="flex-1 overflow-y-auto px-4 md:px-6 py-6 bg-gray-50">
             <div className="max-w-4xl mx-auto space-y-6">
-              {messages.map((message, index) => (
+              {/* Reference toggle */}
+              {/* <div className="flex items-center justify-end gap-3">
+                <label className="text-sm text-gray-600">Hiển thị tham chiếu</label>
+                <input
+                  type="checkbox"
+                  checked={refToggle}
+                  onChange={(e) => setRefToggle(e.target.checked)}
+                />
+              </div> */}
+
+              {messages.filter((m) => !(m.role === "reference" && !refToggle)).map((message, index) => (
                 <div
                   key={message.id}
                   className={`flex items-start gap-3 ${
-                    message.sender === "user" ? "flex-row-reverse" : ""
+                    message.role === "user" ? "flex-row-reverse" : ""
                   } animate-in fade-in slide-in-from-bottom-4 duration-500`}
                   style={{ animationDelay: `${index * 50}ms` }}
                 >
                   <div
                     className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md ${
-                      message.sender === "user"
-                        ? "bg-gray-800"
-                        : "bg-black"
+                      message.role === "user" ? "bg-white border border-gray-200" : "bg-black"
                     }`}
                   >
-                    {message.sender === "user" ? (
-                      <User className="w-5 h-5 text-white" />
+                    {message.role === "user" ? (
+                      <Image src="/OIP.webp" alt="KAT" width={20} height={20} className="rounded-sm object-contain" />
                     ) : (
                       <Bot className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <div
-                    className={`flex flex-col gap-1 max-w-[70%] ${
-                      message.sender === "user" ? "items-end" : "items-start"
-                    }`}
-                  >
-                    <div
-                      className={`rounded-2xl px-4 py-3 shadow-sm ${
-                        message.sender === "user"
-                          ? "bg-black text-white rounded-tr-md"
-                          : "bg-white border border-gray-200 text-gray-800 rounded-tl-md"
-                      }`}
-                    >
-                      <p className="text-sm leading-relaxed">{message.text}</p>
-                    </div>
+                  <div className={`flex flex-col gap-1 max-w-[70%] ${message.role === "user" ? "items-end" : "items-start"}`}>
+                    {message.role === "reference" ? (
+                      refToggle ? (
+                        <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                          {Array.isArray(message.content) ? (
+                            message.content.map((md: any, idx: number) => (
+                              <details key={idx} className="mb-2">
+                                <summary className="cursor-pointer text-sm font-medium">{md.title || `Tham chiếu #${idx+1}`}</summary>
+                                <div className="mt-2">
+                                  {typeof md.content === "string" ? (
+                                    <div className="prose max-w-none text-sm" dangerouslySetInnerHTML={{ __html: fixLinksInHtml(md.content.replace(/\n/g, "\n\n")) }} />
+                                  ) : (
+                                    <pre className="text-xs bg-gray-50 p-2 rounded border border-gray-200 overflow-auto">{JSON.stringify(md.content, null, 2)}</pre>
+                                  )}
+                                </div>
+                              </details>
+                            ))
+                          ) : (
+                            <pre className="text-xs bg-gray-50 p-2 rounded border border-gray-200 overflow-auto">{JSON.stringify(message.content, null, 2)}</pre>
+                          )}
+                        </div>
+                      ) : null
+                    ) : message.role === "chart" ? (
+                      <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                        <div dangerouslySetInnerHTML={{ __html: String(message.content) }} />
+                      </div>
+                    ) : (
+                      <div className={`rounded-2xl px-4 py-3 shadow-sm ${message.role === "user" ? "bg-white border border-gray-200 text-gray-800 rounded-tr-md" : "bg-white border border-gray-200 text-gray-800 rounded-tl-md"}`}>
+                        {message.role === "assistant" ? (
+                          <div className="text-sm leading-relaxed prose max-w-none" dangerouslySetInnerHTML={{ __html: formatAssistantHtml(String(message.content || "")) }} />
+                        ) : (
+                          <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                        )}
+                      </div>
+                    )}
                     <span className="text-xs text-gray-400 px-2">
-                      {formatTime(message.timestamp)}
+                      {formatTime(new Date(message.timestamp))}
                     </span>
                   </div>
                 </div>
               ))}
 
-              {/* Typing Indicator */}
-              {isTyping && (
+              {/* Typing Indicator: only until first assistant chunk appears */}
+              {isTyping && !messages.some((m) => m.id === assistantStreamingIdRef.current && m.role === "assistant") && (
                 <div className="flex items-start gap-3 animate-in fade-in slide-in-from-bottom-4">
                   <div className="flex-shrink-0 w-10 h-10 rounded-full bg-black flex items-center justify-center shadow-md">
                     <Bot className="w-5 h-5 text-white" />
@@ -149,36 +767,39 @@ export default function ModernChatPage() {
             </div>
           </main>
 
-          {/* Input Area */}
-          <footer className="bg-white border-t border-gray-200 px-4 md:px-6 py-4 shadow-sm">
-            <div className="max-w-4xl mx-auto">
-              <div className="relative flex items-center gap-2">
-                <div className="relative flex-1">
-                  <input
-                    ref={inputRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                    placeholder="Nhập tin nhắn của bạn..."
-                    className="w-full px-5 py-3.5 pr-12 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                  />
-                  <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                    <Smile className="w-5 h-5 text-gray-400" />
+          
+          )}
+          {messages.length > 0 && (
+            <footer className="bg-white border-t border-gray-200 px-4 md:px-6 py-4 shadow-sm">
+              <div className="max-w-4xl mx-auto">
+                <div className="relative flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                      placeholder="Nhập tin nhắn của bạn..."
+                      className="w-full px-5 py-3.5 pr-12 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                    />
+                    <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                      <Smile className="w-5 h-5 text-gray-400" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!input.trim()}
+                    className="flex-shrink-0 bg-black hover:bg-gray-800 disabled:bg-gray-300 text-white p-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all disabled:cursor-not-allowed"
+                  >
+                    <Send className="w-5 h-5" />
                   </button>
                 </div>
-                <button
-                  onClick={handleSendMessage}
-                  disabled={!input.trim()}
-                  className="flex-shrink-0 bg-black hover:bg-gray-800 disabled:bg-gray-300 text-white p-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all disabled:cursor-not-allowed"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
+                <p className="text-xs text-gray-400 text-center mt-3">
+                  AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
+                </p>
               </div>
-              <p className="text-xs text-gray-400 text-center mt-3">
-                AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
-              </p>
-            </div>
-          </footer>
+            </footer>
+          )}
         </div>
       </div>
     </SidebarProvider>

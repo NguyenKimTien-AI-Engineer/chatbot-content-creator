@@ -35,36 +35,36 @@ const menuItems = [
     url: "/chat",
     icon: MessageSquare,
   },
-  {
-    title: "Tạo nội dung Fanpage",
-    url: "/fanpage",
-    icon: FileText,
-  },
-  {
-    title: "Custom Prompt",
-    url: "/custom-prompt",
-    icon: Edit3,
-  },
-  {
-    title: "Kế hoạch nội dung",
-    url: "#",
-    icon: BarChart3,
-  },
-  {
-    title: "Branding",
-    url: "#",
-    icon: Sparkles,
-  },
-  {
-    title: "Quản lý người dùng",
-    url: "#",
-    icon: Users,
-  },
-  {
-    title: "Cài đặt",
-    url: "#",
-    icon: Settings,
-  },
+  // {
+  //   title: "Tạo nội dung Fanpage",
+  //   url: "/fanpage",
+  //   icon: FileText,
+  // },
+  // {
+  //   title: "Custom Prompt",
+  //   url: "/custom-prompt",
+  //   icon: Edit3,
+  // },
+  // {
+  //   title: "Kế hoạch nội dung",
+  //   url: "#",
+  //   icon: BarChart3,
+  // },
+  // {
+  //   title: "Branding",
+  //   url: "#",
+  //   icon: Sparkles,
+  // },
+  // {
+  //   title: "Quản lý người dùng",
+  //   url: "#",
+  //   icon: Users,
+  // },
+  // {
+  //   title: "Cài đặt",
+  //   url: "#",
+  //   icon: Settings,
+  // },
 ];
 
 export function AppSidebar() {

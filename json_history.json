@@ -1,0 +1,46 @@
+/** 
+* Paste one or more documents here
+*/
+{
+  "history_id": "24380a0b-3233-4026-82de-fcbe72a67925",
+  "session_id": "103345341590250_69142c69b1ae11cd323471db",
+  "query": "em ơi",
+  "answer": "Dạ, em chào anh/chị. Anh/chị cần tư vấn sản phẩm hay hỗ trợ gì ạ? Anh/chị cứ chia sẻ để em hỗ trợ nhanh nhất nhé!",
+  "answer_segments": [
+    {
+      "type": "text",
+      "data": "Dạ, em chào anh/chị"
+    },
+    {
+      "type": "text",
+      "data": "Anh/chị cần tư vấn sản phẩm hay hỗ trợ gì ạ?"
+    },
+    {
+      "type": "text",
+      "data": "Anh/chị cứ chia sẻ để em hỗ trợ nhanh nhất nhé!"
+    }
+  ],
+  "media": {},
+  "status": "active",
+  "user_id": "69142c69b1ae11cd323471db",
+  "company_id": "69142c69b1ae11cd323471e0",
+  "customer_id": "69142c69b1ae11cd323471db",
+  "sender_info": {
+    "name": null,
+    "profile_pic": null,
+    "gender": null,
+    "id": "69142c69b1ae11cd323471db",
+    "status": 400,
+    "message": "Failed to get user info from Facebook"
+  },
+  "bot_id": "69142c69b1ae11cd323471fb",
+  "social_id": null,
+  "social_page_id": "103345341590250",
+  "social_access_link": "https://business.facebook.com/latest/inbox/all/?nav_ref=manage_page_ap_plus_inbox_message_button&asset_id=103345341590250&business_id=&mailbox_id=&selected_item_id=69142c69b1ae11cd323471db&thread_type=FB_MESSAGE",
+  "created_at": {
+    "$date": "2025-11-12T13:51:10.274Z"
+  },
+  "updated_at": {
+    "$date": "2025-11-12T13:51:10.274Z"
+  }
+}

@@ -21,6 +21,7 @@ class MongoDBManager:
         self.database: Optional[AsyncIOMotorDatabase] = None
         self.templates_collection: Optional[AsyncIOMotorCollection] = None
         self.content_history_collection: Optional[AsyncIOMotorCollection] = None
+        self.histories_collection: Optional[AsyncIOMotorCollection] = None
         self.products_collection: Optional[AsyncIOMotorCollection] = None
         self.post_types_collection: Optional[AsyncIOMotorCollection] = None
         
@@ -76,6 +77,7 @@ class MongoDBManager:
             self.database = self.client[self.database_name]
             self.templates_collection = self.database["templates"]
             self.content_history_collection = self.database["content_history"]
+            self.histories_collection = self.database["histories"]
             self.products_collection = self.database["products"]
             self.post_types_collection = self.database["post_types"]
             
@@ -84,6 +86,12 @@ class MongoDBManager:
                 await self.templates_collection.create_index([("timestamp", -1)])
                 await self.content_history_collection.create_index([("created_at", -1)])
                 await self.content_history_collection.create_index([("user_id", 1)])
+                # Indexes for chat histories
+                if self.histories_collection is not None:
+                    await self.histories_collection.create_index([("conversation_id", 1)], unique=True)
+                    await self.histories_collection.create_index([("user_id", 1)])
+                    await self.histories_collection.create_index([("created_at", -1)])
+                    await self.histories_collection.create_index([("updated_at", -1)])
                 await self.products_collection.create_index([("sku", 1)])
                 await self.products_collection.create_index([("name", "text")])
                 await self.products_collection.create_index([("data.category", 1)])
@@ -98,6 +106,202 @@ class MongoDBManager:
             
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             print(f"[MONGODB] Connection failure: {e}")
+            return False
+
+    async def create_conversation(
+        self,
+        conversation_id: str,
+        user_id: str,
+        first_message: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        updated_at: Optional[Any] = None,
+        extra_document: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Khởi tạo conversation trong 'histories' với hỗ trợ messages và updated_at.
+
+        Upsert theo 'conversation_id' và chuẩn hóa timestamp.
+        """
+        if self.histories_collection is None:
+            return False
+
+        def _parse_iso(ts: str) -> Optional[datetime]:
+            try:
+                if ts.endswith("Z"):
+                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                return datetime.fromisoformat(ts)
+            except Exception:
+                return None
+
+        def _normalize_timestamp(ts: Any, default: datetime) -> datetime:
+            if ts is None:
+                return default
+            if isinstance(ts, datetime):
+                return ts
+            if isinstance(ts, str):
+                parsed = _parse_iso(ts)
+                return parsed or default
+            if isinstance(ts, dict):
+                iso = ts.get("$date")
+                if isinstance(iso, str):
+                    parsed = _parse_iso(iso)
+                    return parsed or default
+            return default
+
+        attempts = 0
+        while attempts < 3:
+            try:
+                now = datetime.utcnow()
+                doc_updated_at = _normalize_timestamp(updated_at, now)
+                extra = extra_document or {}
+                doc_created_at = now
+                if extra.get("created_at") is not None:
+                    doc_created_at = _normalize_timestamp(extra.get("created_at"), now)
+                    # avoid duplicate after normalization
+                    extra.pop("created_at", None)
+
+                normalized_messages: List[Dict[str, Any]] = []
+                source_messages = messages or []
+
+                if first_message:
+                    source_messages = [first_message] + source_messages
+
+                for msg in source_messages:
+                    m = msg.copy()
+                    m["timestamp"] = _normalize_timestamp(m.get("timestamp"), now)
+                    normalized_messages.append(m)
+
+                doc: Dict[str, Any] = {
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "created_at": doc_created_at,
+                    "updated_at": doc_updated_at,
+                    "messages": normalized_messages,
+                    "metadata": metadata or {},
+                }
+
+                # merge extra fields (remove None)
+                for k, v in (extra.items()):
+                    if v is not None:
+                        doc[k] = v
+                if "status" not in doc:
+                    doc["status"] = "active"
+
+                await self.histories_collection.update_one(
+                    {"conversation_id": conversation_id},
+                    {"$setOnInsert": doc, "$set": {"updated_at": doc_updated_at}},
+                    upsert=True,
+                )
+                return True
+            except (ConnectionFailure, ServerSelectionTimeoutError):
+                attempts += 1
+                await asyncio.sleep(0.5 * attempts)
+                await self.connect()
+            except Exception:
+                return False
+        return False
+
+    async def append_message(self, conversation_id: str, message: Dict[str, Any]) -> bool:
+        """Thêm message vào conversation, chuẩn hóa timestamp. Có retry."""
+        if self.histories_collection is None:
+            return False
+
+        def _parse_iso(ts: str) -> Optional[datetime]:
+            try:
+                if ts.endswith("Z"):
+                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                return datetime.fromisoformat(ts)
+            except Exception:
+                return None
+
+        def _normalize_timestamp(ts: Any, default: datetime) -> datetime:
+            if ts is None:
+                return default
+            if isinstance(ts, datetime):
+                return ts
+            if isinstance(ts, str):
+                parsed = _parse_iso(ts)
+                return parsed or default
+            if isinstance(ts, dict):
+                iso = ts.get("$date")
+                if isinstance(iso, str):
+                    parsed = _parse_iso(iso)
+                    return parsed or default
+            return default
+
+        attempts = 0
+        while attempts < 3:
+            try:
+                now = datetime.utcnow()
+                msg = message.copy()
+                msg["timestamp"] = _normalize_timestamp(msg.get("timestamp"), now)
+
+                result = await self.histories_collection.update_one(
+                    {"conversation_id": conversation_id},
+                    {"$push": {"messages": msg}, "$set": {"updated_at": now}},
+                    upsert=True,
+                )
+                return result.acknowledged
+            except (ConnectionFailure, ServerSelectionTimeoutError):
+                attempts += 1
+                await asyncio.sleep(0.5 * attempts)
+                await self.connect()
+            except Exception:
+                return False
+        return False
+
+    async def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy chi tiết conversation theo conversation_id."""
+        if self.histories_collection is None:
+            return None
+        try:
+            doc = await self.histories_collection.find_one({"conversation_id": conversation_id})
+            if not doc:
+                return None
+            doc.pop("_id", None)
+            return doc
+        except Exception:
+            return None
+
+    async def list_conversations(self, user_id: str, limit: int = 20, skip: int = 0) -> List[Dict[str, Any]]:
+        """Danh sách conversation theo user_id với phân trang."""
+        if self.histories_collection is None:
+            return []
+        try:
+            cursor = self.histories_collection.find({"user_id": user_id}).sort("updated_at", -1).skip(skip).limit(limit)
+            out: List[Dict[str, Any]] = []
+            async for doc in cursor:
+                doc.pop("_id", None)
+                # Ưu tiên preview từ answer nếu có, fallback về tin nhắn cuối
+                answer = doc.get("answer")
+                if isinstance(answer, str) and answer:
+                    doc["preview"] = answer[:160]
+                else:
+                    last = doc.get("messages", [])[-1] if doc.get("messages") else None
+                    if last and isinstance(last.get("content"), str):
+                        doc["preview"] = last["content"][:160]
+                out.append(doc)
+            return out
+        except Exception:
+            return []
+
+    async def count_conversations_by_user(self, user_id: str) -> int:
+        """Đếm số conversation theo user_id."""
+        if self.histories_collection is None:
+            return 0
+        try:
+            return await self.histories_collection.count_documents({"user_id": user_id})
+        except Exception:
+            return 0
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """Xóa conversation."""
+        if self.histories_collection is None:
+            return False
+        try:
+            result = await self.histories_collection.delete_one({"conversation_id": conversation_id})
+            return result.deleted_count > 0
+        except Exception:
             return False
         except Exception as e:
             print(f"[MONGODB] Unexpected error during connection: {e}")

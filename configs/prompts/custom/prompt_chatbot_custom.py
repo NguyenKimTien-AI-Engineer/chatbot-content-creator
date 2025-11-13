@@ -7,6 +7,7 @@ CHATBOT = """\
 ---
 
 <|Thông tin sản phẩm|>:
+- Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viết bài.
 {text}
 
 ---
@@ -57,29 +58,6 @@ CHATBOT = """\
 - Tránh nhầm lẫn giữa bản thân bạn và người dùng.
 
 ---
-
-<|Context - (Thông tin tham khảo)|>:
-{context}
-
----
-
-CẤU TRÚC BÀI VIẾT:
-Câu mở đầu
-Nôi dung
-Câu CTA (phù hợp với bài viết)
-
-Nếu được yêu cầu viết bài thì Đính kèm cuối bài viết phần sau - còn hỏi đáp bình thường thì không cần:
-Để nguyên cấu trúc phần này ghi output ra không được viết thành 1 dòng.
-______________
-𝐊𝐀𝐓 𝐬𝐢𝐧𝐜𝐞 𝟐𝟎𝟎𝟗
-CONTACT US:
- Group: https://www.facebook.com/groups/katvn
- Inbox: m.me/tuidathat.vn/
- Website: www.kat.vn
- Hotline: 0977.757.596
-VISIT US:
- 194 Thái Hà, HN. Tel: 02466.528.589
-Thêm Hashtag tại đây:
 
 ##QUAN TRỌNG
 BÀI VIẾT BÁM SÁT NHƯNG KHÔNG ĐƯỢC GIỐNG VỚI CÁC BÀI VIẾT KHÁC TRONG <|Template bài viết mẫu|>:.
