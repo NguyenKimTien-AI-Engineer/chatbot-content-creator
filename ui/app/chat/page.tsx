@@ -511,6 +511,8 @@ export default function ModernChatPage() {
   const [pendingChart, setPendingChart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string>("");
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -527,6 +529,20 @@ export default function ModernChatPage() {
   useEffect(() => {
     if (!sessionId) setSessionId(generateRandomHistoryId());
   }, [sessionId]);
+
+  useEffect(() => {
+    if (uploadSuccess) {
+      const t = setTimeout(() => setUploadSuccess(false), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [uploadSuccess]);
+
+  useEffect(() => {
+    if (uploadError) {
+      const t = setTimeout(() => setUploadError(null), 7000);
+      return () => clearTimeout(t);
+    }
+  }, [uploadError]);
 
   const handleSendMessage = async () => {
     if (input.trim() === "") return;
@@ -658,6 +674,20 @@ export default function ModernChatPage() {
       if (!res || !res.ok) {
         const msg = await (res ? res.text() : Promise.resolve("Network error"));
         setUploadError(msg || "Upload failed");
+      } else {
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        const fileName = file?.name || "tập tin";
+        const points = data?.total_saved_points ?? data?.count ?? null;
+        const msgParts: string[] = [];
+        msgParts.push(`Đã tải và xử lý xong: ${fileName}`);
+        if (typeof points === "number") msgParts.push(`(${points} đoạn)`);
+        setUploadMessage(msgParts.join(" "));
+        setUploadSuccess(true);
       }
     } catch (err: any) {
       setUploadError(String(err?.message || err));
@@ -703,28 +733,40 @@ export default function ModernChatPage() {
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
                       placeholder="Bạn muốn biết điều gì?"
-                      className="w-full px-5 py-3.5 pr-24 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
                     />
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <button
+                        onClick={handleAttachClick}
+                        disabled={isUploading}
+                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                      >
+                        <Paperclip className="w-5 h-5 text-gray-400" />
+                      </button>
+                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                        <Smile className="w-5 h-5 text-gray-400" />
+                      </button>
+                    </div>
                     <button
-                      onClick={handleAttachClick}
-                      disabled={isUploading}
-                      className="absolute right-10 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                      title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                      onClick={handleSendMessage}
+                      disabled={!input.trim()}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                     >
-                      <Paperclip className="w-5 h-5 text-gray-400" />
-                    </button>
-                    <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                      <Smile className="w-5 h-5 text-gray-400" />
+                      <Send className="w-5 h-5" />
                     </button>
                   </div>
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!input.trim()}
-                    className="flex-shrink-0 bg-black hover:bg-gray-800 disabled:bg-gray-300 text-white p-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all disabled:cursor-not-allowed"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
+                  
                 </div>
+                {isUploading && (
+                  <p className="text-xs text-blue-600 text-center mt-2">Đang tải và xử lý tài liệu...</p>
+                )}
+                {uploadSuccess && uploadMessage && (
+                  <p className="text-xs text-green-600 text-center mt-2" aria-live="polite">{uploadMessage}</p>
+                )}
+                {uploadError && (
+                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">{uploadError}</p>
+                )}
                 <p className="text-xs text-gray-400 text-center mt-3">
                   AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
                 </p>
@@ -851,6 +893,15 @@ export default function ModernChatPage() {
                     />
                   )}
                 </div>
+                {isUploading && (
+                  <p className="text-xs text-blue-600 mt-2">Đang tải và xử lý tài liệu...</p>
+                )}
+                {uploadSuccess && uploadMessage && (
+                  <p className="text-xs text-green-600 mt-2" aria-live="polite">{uploadMessage}</p>
+                )}
+                {uploadError && (
+                  <p className="text-xs text-red-600 mt-2" aria-live="polite">{uploadError}</p>
+                )}
                 <div className="relative flex items-center gap-2">
                   <div className="relative flex-1">
                     <input
@@ -865,27 +916,30 @@ export default function ModernChatPage() {
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
                       placeholder="Nhập tin nhắn của bạn..."
-                      className="w-full px-5 py-3.5 pr-24 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
                     />
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <button
+                        onClick={handleAttachClick}
+                        disabled={isUploading}
+                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                      >
+                        <Paperclip className="w-5 h-5 text-gray-400" />
+                      </button>
+                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                        <Smile className="w-5 h-5 text-gray-400" />
+                      </button>
+                    </div>
                     <button
-                      onClick={handleAttachClick}
-                      disabled={isUploading}
-                      className="absolute right-10 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                      title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                      onClick={handleSendMessage}
+                      disabled={!input.trim()}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                     >
-                      <Paperclip className="w-5 h-5 text-gray-400" />
-                    </button>
-                    <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                      <Smile className="w-5 h-5 text-gray-400" />
+                      <Send className="w-5 h-5" />
                     </button>
                   </div>
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!input.trim()}
-                    className="flex-shrink-0 bg-black hover:bg-gray-800 disabled:bg-gray-300 text-white p-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all disabled:cursor-not-allowed"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
+                  
                 </div>
                 <p className="text-xs text-gray-400 text-center mt-3">
                   AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
