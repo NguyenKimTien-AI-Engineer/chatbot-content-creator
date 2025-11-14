@@ -92,10 +92,11 @@ function formatAssistantHtml(raw: string): string {
     const numRegex = /^\d+[\).\s]+/;
     let inUl = false;
     let inOl = false;
+    let olCounter = 0; // ổn định đánh số cho danh sách có thứ tự
 
     const closeLists = () => {
       if (inUl) { html += "</ul>"; inUl = false; }
-      if (inOl) { html += "</ol>"; inOl = false; }
+      if (inOl) { html += "</ol>"; inOl = false; olCounter = 0; }
     };
 
     // Extended helpers and states for richer formatting
@@ -269,9 +270,10 @@ function formatAssistantHtml(raw: string): string {
       const isOrdered = numRegex.test(tNorm) || alphaRegex.test(tNorm) || romanRegex.test(tNorm);
       if (isOrdered) {
         flushTable();
-        if (!inOl) { closeLists(); html += '<ol class=\"list-decimal pl-5 space-y-1\">'; inOl = true; }
+        if (!inOl) { closeLists(); html += '<ol class=\"pl-5 space-y-1 list-none\">'; inOl = true; olCounter = 0; }
         const stripped = tNorm.replace(numRegex, "").replace(alphaRegex, "").replace(romanRegex, "");
-        html += `<li>${boldInline(stripped)}</li>`;
+        olCounter += 1;
+        html += `<li class=\"flex items-start gap-2\"><span class=\"text-gray-500 select-none\">${olCounter}.<\/span><span>${boldInline(stripped)}<\/span><\/li>`;
         continue;
       }
       // Markdown table row
