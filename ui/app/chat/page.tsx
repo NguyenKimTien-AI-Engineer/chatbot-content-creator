@@ -503,6 +503,8 @@ export default function ModernChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [systemInstructionUser, setSystemInstructionUser] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [refToggle, setRefToggle] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [userId] = useState<string>("default");
@@ -554,6 +556,7 @@ export default function ModernChatPage() {
       collections: [DEFAULT_COLLECTION],
       session_id: sessionId,
       history_id: "",
+      system_instruction_user: systemInstructionUser,
       include_products: true,
     };
 
@@ -774,6 +777,23 @@ export default function ModernChatPage() {
           {messages.length > 0 && (
             <footer className="bg-white border-t border-gray-200 px-4 md:px-6 py-4 shadow-sm">
               <div className="max-w-4xl mx-auto">
+                <div className="mb-3">
+                  <button
+                    className="text-xs text-gray-600 hover:text-gray-900 underline"
+                    onClick={() => setShowAdvanced((s) => !s)}
+                  >
+                    {showAdvanced ? "Ẩn hướng dẫn hệ thống (User)" : "Hiển thị hướng dẫn hệ thống (User)"}
+                  </button>
+                  {showAdvanced && (
+                    <textarea
+                      value={systemInstructionUser}
+                      onChange={(e) => setSystemInstructionUser(e.target.value)}
+                      placeholder="Nhập hướng dẫn hệ thống dành cho User..."
+                      className="mt-2 w-full px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-black focus:outline-none text-sm"
+                      rows={3}
+                    />
+                  )}
+                </div>
                 <div className="relative flex items-center gap-2">
                   <div className="relative flex-1">
                     <input

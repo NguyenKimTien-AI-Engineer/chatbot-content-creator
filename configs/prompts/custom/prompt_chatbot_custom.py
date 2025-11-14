@@ -6,6 +6,11 @@ CHATBOT = """\
 
 ---
 
+<|System_Intruction_User - (User)|>:
+{system_instruction_user}
+
+---
+
 <|Thông tin sản phẩm|>:
 Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viết bài.
 {text}

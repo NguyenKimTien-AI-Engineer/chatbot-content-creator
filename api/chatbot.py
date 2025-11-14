@@ -60,6 +60,7 @@ class ChatbotCustomPromptRequest(BaseModel):
     collections: Union[str, int, List[Any], Dict[str, Any]] = []
     session_id: Union[str, int, List[Any], Dict[str, Any]] = ""
     history_id: Union[str, int, List[Any], Dict[str, Any]] = ""
+    system_instruction_user: Union[str, int, List[Any], Dict[str, Any]] = ""
     include_products: bool = True
 
 
@@ -381,6 +382,7 @@ async def chatbot_custom_prompt_endpoint(request: ChatbotCustomPromptRequest):
             request.collections,
             request.session_id,
             request.history_id,
+            request.system_instruction_user,
             request.include_products,
         )
 
@@ -408,6 +410,7 @@ async def chatbot_custom_prompt_stream_endpoint(request: ChatbotCustomPromptRequ
             request.collections,
             request.session_id,
             request.history_id,
+            request.system_instruction_user,
             request.include_products,
         )
 

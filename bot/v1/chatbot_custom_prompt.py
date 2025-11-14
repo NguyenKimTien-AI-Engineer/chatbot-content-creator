@@ -224,7 +224,7 @@ Hình ảnh: {', '.join(image_urls) if image_urls else 'Không có hình ảnh'}
 
 
 ############################################################################################################
-def chatbot_custom_prompt_stream(user_id, query, collections, session_id, history_id, include_products: bool = True):
+def chatbot_custom_prompt_stream(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True):
     # query_ = asyncio.run(translate.translate_to_english(query))
     start_time = time.time()
 
@@ -285,8 +285,10 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
 
     # print("⚙️ Prompt: ", _prompt)
 
-    # Lấy system prompt từ file system.py thay vì từ parameter
+    # Lấy system prompt từ file system.py và làm sạch
     system_prompt = clean.clean_special_characters(system.system)
+    # Làm sạch system_instruction_user do người dùng nhập
+    system_instruction_user = clean.clean_special_characters(str(system_instruction_user or ""))
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -301,7 +303,10 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         "question": str(query), 
         "context": str(contexts), 
         "history": str(history_context), 
-        "time_now": str(current_time)
+        "time_now": str(current_time),
+        "checklist": str(checklist.checklist),
+        "text": str(product_context),
+        "system_instruction_user": str(system_instruction_user),
     }
 
     # Debug logging - set DEBUG_PROMPT=True to see full prompt
@@ -398,11 +403,22 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
 
         return
 
-    return generate_chat_responses({"system": str(system_prompt), "template": str(template_content.template), "checklist": str(checklist.checklist), "question": str(query), "context": str(contexts), "history": str(history_context), "time_now": str(current_time), "text": str(product_context), "message_payload": message_payload})
+    return generate_chat_responses({
+        "system": str(system_prompt),
+        "template": str(template_content.template),
+        "checklist": str(checklist.checklist),
+        "question": str(query),
+        "context": str(contexts),
+        "history": str(history_context),
+        "time_now": str(current_time),
+        "text": str(product_context),
+        "system_instruction_user": str(system_instruction_user),
+        "message_payload": message_payload,
+    })
     # return generate_chat_responses(message_payload)
 
 
-def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, include_products: bool = True):
+def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True):
     """
     Phiên bản không streaming của chatbot custom prompt với hỗ trợ dữ liệu sản phẩm.
     """
@@ -458,8 +474,10 @@ def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, i
 
     contexts, num_token_input = context_reduce.context_reduce(contexts, constant.MODEL_CHATBOT_CUSTOM_PROMPT)
 
-    # Lấy system prompt từ file system.py thay vì từ parameter
+    # Lấy system prompt từ file system.py và làm sạch
     system_prompt = clean.clean_special_characters(system.system)
+    # Làm sạch system_instruction_user do người dùng nhập
+    system_instruction_user = clean.clean_special_characters(str(system_instruction_user or ""))
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -471,7 +489,17 @@ def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, i
             prompt | environment.get_llm(model=constant.MODEL_CHATBOT_CUSTOM_PROMPT) | StrOutputParser()
     )
 
-    answer = chain.invoke({"system": str(system_prompt), "template": str(template_content.template), "checklist": str(checklist.checklist), "question": str(query), "context": str(contexts), "history": str(history_context), "time_now": str(current_time), "text": str(product_context)})
+    answer = chain.invoke({
+        "system": str(system_prompt),
+        "template": str(template_content.template),
+        "checklist": str(checklist.checklist),
+        "question": str(query),
+        "context": str(contexts),
+        "history": str(history_context),
+        "time_now": str(current_time),
+        "text": str(product_context),
+        "system_instruction_user": str(system_instruction_user),
+    })
 
     pages = reference.extract_reference_document_numbers(answer)
     filter_references = reference.filter_reference_from_page(references, pages)
