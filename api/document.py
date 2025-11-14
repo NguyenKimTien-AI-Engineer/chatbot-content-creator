@@ -6,11 +6,22 @@ import asyncio
 import re
 import aiofiles
 from pathlib import Path
-from typing import Union, Optional, List, Dict, Any
+from typing import Union, Optional, List, Dict, Any, Tuple
+
+from langchain_core.documents import Document
 
 from configs import constant
 from controllers.modules import upload_files
-from controllers.databases.vector.qdrant import collections
+from controllers.databases.vector.qdrant import collections, qdrant
+from controllers.documents.pdf import process_pdf
+from controllers.documents.docx import process_docx
+from controllers.documents.xlsx import process_xlsx
+from controllers.documents.txt import process_txt
+from controllers.documents.csv import process_csv
+from controllers.documents.html import process_html
+from controllers.documents.md import process_md
+from controllers.documents.json import process_json
+from controllers.modules import node_structured
 
 router = APIRouter()
 
@@ -128,6 +139,134 @@ def remove_file(file_path_rm):
     except PermissionError as e:
         print("File remove error: ", e)
         pass
+
+
+# ===================================================================================
+# BUILD DOCS LIKE TEST APPEND PIPELINE
+async def build_docs_for_file(
+    file_path: str,
+    user_id: str,
+    language: str = "vie+eng",
+) -> Tuple[List[Document], List[str], str]:
+    path = Path(file_path)
+    file_name = path.name
+    ext = path.suffix.lower().lstrip(".")
+    folder_path = f"{constant.DATA_USER}/{user_id}"
+
+    if ext == "pdf":
+        raw_elements, images = await asyncio.to_thread(
+            process_pdf.process_pdf, folder_path, str(path), language
+        )
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_pdf, raw_elements, images, file_name
+        )
+    elif ext in {"doc", "docx"}:
+        raw_elements, images = await asyncio.to_thread(process_docx.process_docx, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_docx, raw_elements, images, file_name
+        )
+    elif ext == "xlsx":
+        all_data = await asyncio.to_thread(process_xlsx.process_xlsx, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_excel, all_data, file_name
+        )
+    elif ext == "txt":
+        products, _ = await asyncio.to_thread(process_txt.process_products_txt, str(path))
+        if products:
+            docs, ids = await asyncio.to_thread(
+                node_structured.node_structured_products_text, products, file_name
+            )
+        else:
+            raw_elements, _ = await asyncio.to_thread(process_txt.process_txt, str(path))
+            docs, ids = await asyncio.to_thread(
+                node_structured.node_structured_text, raw_elements, file_name, "txt"
+            )
+    elif ext == "csv":
+        raw_elements, _ = await asyncio.to_thread(process_csv.process_csv, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_csv, raw_elements, file_name
+        )
+    elif ext in {"html", "htm"}:
+        raw_elements, _ = await asyncio.to_thread(process_html.process_html, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_html, raw_elements, file_name
+        )
+    elif ext in {"md", "markdown"}:
+        raw_elements, _ = await asyncio.to_thread(process_md.process_md, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_markdown, raw_elements, file_name
+        )
+    elif ext == "json":
+        raw_elements, _ = await asyncio.to_thread(process_json.process_json, str(path))
+        docs, ids = await asyncio.to_thread(
+            node_structured.node_structured_json, raw_elements, file_name
+        )
+    else:
+        raise ValueError(f"Unsupported file type: .{ext}")
+
+    return docs, ids, file_name
+
+
+# ===================================================================================
+# NEW: UPLOAD AND APPEND TO A SPECIFIC COLLECTION (DEFAULT FROM CLIENT)
+@router.post("/v1/upload-to-collection")
+@router.post("/v1/upload-to-collection/")
+async def upload_to_collection_endpoint(
+    user_id: Optional[str] = Form("default"),
+    collection_name: Optional[str] = Form(""),
+    file: Optional[Union[UploadFile, str]] = File(None),
+    language: Optional[str] = Form("vie+eng"),
+    note: Optional[str] = Form(""),
+):
+    file_path = ""
+
+    try:
+        base_path = constant.DATA + "/" + constant.CHATBOT_NAME
+        contents = await file.read()
+        await file.seek(0)
+        user_dir = Path(base_path) / (user_id or "default")
+        user_dir.mkdir(parents=True, exist_ok=True)
+        file_path = user_dir / file.filename
+
+        chunk_size = 1024 * 1024
+        async with aiofiles.open(file_path, "wb") as f:
+            for i in range(0, len(contents), chunk_size):
+                await f.write(contents[i: i + chunk_size])
+                await asyncio.sleep(0.01)
+
+        docs, ids, file_name = await build_docs_for_file(str(file_path), user_id or "default", language)
+        if not docs:
+            content = {"status": 400, "message": "Invalid File."}
+            return JSONResponse(content=jsonable_encoder(content), status_code=400)
+
+        target_collection = (collection_name or "").strip()
+        if not target_collection:
+            content = {"status": 400, "message": "Missing collection_name."}
+            return JSONResponse(content=jsonable_encoder(content), status_code=400)
+
+        info = {"collection_name": target_collection, "file_name": file_name, "note": note}
+        data_user = await asyncio.to_thread(collections.save_qdrant_collection_user, user_id or "default", info)
+        await asyncio.to_thread(collections.save_qdrant_collection_all, info)
+        await asyncio.to_thread(qdrant.save_vector_db_as_ids, docs, target_collection, ids)
+
+        content = {
+            "status": 200,
+            "data": data_user,
+            "message": "File appended to collection successfully.",
+        }
+        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+
+    except Exception as e:
+        print("Error upload_to_collection: ", e)
+        content = {"status": 400, "message": "Error upload_to_collection: " + str(e)}
+        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+
+    finally:
+        try:
+            if file_path:
+                remove_file(Path(file_path))
+        except Exception:
+            pass
 
 
 # --- Endpoint lưu collection cho 1 user ---

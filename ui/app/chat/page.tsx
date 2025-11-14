@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, Smile } from "lucide-react";
+import { Send, Bot, Smile, Paperclip } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import Image from "next/image";
 import { Header } from "@/components/layout/header";
@@ -509,9 +509,12 @@ export default function ModernChatPage() {
   const [sessionId, setSessionId] = useState("");
   const [userId] = useState<string>("default");
   const [pendingChart, setPendingChart] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -624,6 +627,46 @@ export default function ModernChatPage() {
     setIsTyping(false);
   };
 
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (e: any) => {
+    const file = e?.target?.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const form = new FormData();
+      form.append("user_id", userId || "default");
+      form.append("collection_name", DEFAULT_COLLECTION);
+      form.append("file", file);
+      form.append("language", "vie+eng");
+      form.append("note", "");
+
+      const paths = getApiPaths("/api/v1/upload-to-collection");
+      let res: Response | null = null;
+      try {
+        res = await fetch(paths.relative, { method: "POST", body: form });
+      } catch (err) {
+        if (paths.absolute) {
+          res = await fetch(paths.absolute, { method: "POST", body: form });
+        } else {
+          throw err;
+        }
+      }
+      if (!res || !res.ok) {
+        const msg = await (res ? res.text() : Promise.resolve("Network error"));
+        setUploadError(msg || "Upload failed");
+      }
+    } catch (err: any) {
+      setUploadError(String(err?.message || err));
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString("vi-VN", {
       hour: "2-digit",
@@ -649,13 +692,27 @@ export default function ModernChatPage() {
                 <div className="relative flex items-center gap-2 w-full">
                   <div className="relative flex-1">
                     <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={handleFileSelected}
+                    />
+                    <input
                       ref={inputRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
                       placeholder="Bạn muốn biết điều gì?"
-                      className="w-full px-5 py-3.5 pr-12 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      className="w-full px-5 py-3.5 pr-24 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
                     />
+                    <button
+                      onClick={handleAttachClick}
+                      disabled={isUploading}
+                      className="absolute right-10 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                      title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                    >
+                      <Paperclip className="w-5 h-5 text-gray-400" />
+                    </button>
                     <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
                       <Smile className="w-5 h-5 text-gray-400" />
                     </button>
@@ -782,7 +839,7 @@ export default function ModernChatPage() {
                     className="text-xs text-gray-600 hover:text-gray-900 underline"
                     onClick={() => setShowAdvanced((s) => !s)}
                   >
-                    {showAdvanced ? "Ẩn hướng dẫn hệ thống (User)" : "Hiển thị hướng dẫn hệ thống (User)"}
+                    {showAdvanced ? "Ẩn hướng dẫn hệ thống" : "Hiển thị hướng dẫn hệ thống"}  
                   </button>
                   {showAdvanced && (
                     <textarea
@@ -797,13 +854,27 @@ export default function ModernChatPage() {
                 <div className="relative flex items-center gap-2">
                   <div className="relative flex-1">
                     <input
+                      ref={fileInputRef}
+                      type="file"
+                      className="hidden"
+                      onChange={handleFileSelected}
+                    />
+                    <input
                       ref={inputRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
                       placeholder="Nhập tin nhắn của bạn..."
-                      className="w-full px-5 py-3.5 pr-12 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      className="w-full px-5 py-3.5 pr-24 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
                     />
+                    <button
+                      onClick={handleAttachClick}
+                      disabled={isUploading}
+                      className="absolute right-10 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                      title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                    >
+                      <Paperclip className="w-5 h-5 text-gray-400" />
+                    </button>
                     <button className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
                       <Smile className="w-5 h-5 text-gray-400" />
                     </button>
