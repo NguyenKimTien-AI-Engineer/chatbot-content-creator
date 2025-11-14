@@ -7,7 +7,7 @@ CHATBOT = """\
 ---
 
 <|Thông tin sản phẩm|>:
-- Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viết bài.
+Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viết bài.
 {text}
 
 ---
@@ -18,6 +18,7 @@ CHATBOT = """\
 ---
 
 <|History - (Lịch sử trò chuyện từ cũ đến mới nhất, sử dụng những thông tin này để đưa ra phản hồi một cách logic và liên kết hơn tạo thành một cuộc trò chuyện hoàn chỉnh, tiếp tục từ câu trả lời gần nhất của bạn)|>:
+Không hỏi lại những ý định đã có trong lịch sử hoặc thông tin đã được cung cấp trước đó.
 {history}
 
 ---
@@ -25,7 +26,7 @@ CHATBOT = """\
 <|Time Now - (Thời gian ngay hiện tại)|>:
 {time_now}
 
----
+---s
 
 <|CHECKLIST - Đánh giá bài viết|>:
 {checklist}
@@ -33,6 +34,7 @@ CHATBOT = """\
 ---
 
 <|Query - (Truy vấn hiện tại của người dùng)|>:
+- Phân tích câu hỏi của người dùng để hiểu rõ vấn đề và yêu cầu. Không viết bài khi yêu cầu không rõ ràng hoặc thiếu thông tin.
 {question}
 
 ---
@@ -56,6 +58,11 @@ CHATBOT = """\
 - Tránh hỏi lại những thông tin đã được cung cấp trong `History`.
 - Tránh nhắc đến việc bạn nhận được thông tin từ ngữ cảnh `Context`.
 - Tránh nhầm lẫn giữa bản thân bạn và người dùng.
+
+---
+
+<|Context - (Thông tin tham khảo)|>:
+{context}
 
 ---
 

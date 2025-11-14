@@ -2,6 +2,7 @@ from langchain_core.documents import Document
 from typing import List, Tuple
 from bs4 import BeautifulSoup
 import uuid
+import re
 
 from configs import constant
 from controllers.data import clean
@@ -507,6 +508,66 @@ def node_structured_json(
 ) -> tuple[list[Document], list[str]]:
     """Specialized function for JSON files"""
     return node_structured_text(json_elements, file_name, "json")
+
+
+def node_structured_products_text(
+        product_elements: list[str],
+        file_name: str
+) -> tuple[list[Document], list[str]]:
+    """Structured processing for product TXT: one Document per product block."""
+    docs: list[Document] = []
+    doc_ids: list[str] = []
+
+    try:
+        if not product_elements:
+            return docs, doc_ids
+
+        for i, block in enumerate(product_elements):
+            if not block or not block.strip():
+                continue
+
+            lines = block.splitlines()
+            first_line = lines[0].strip() if lines else ""
+
+            m = re.match(r"^(\d+)\.\s+(.*)$", first_line)
+            product_index = m.group(1) if m else str(i + 1)
+            product_title = m.group(2).strip() if m else first_line
+
+            desc_idx = next(
+                (idx for idx, ln in enumerate(lines) if "mô tả sản phẩm" in ln.lower()),
+                -1
+            )
+            description = ""
+            if desc_idx >= 0:
+                description = " ".join(s.strip() for s in lines[desc_idx + 1:]).strip()
+            else:
+                description = " ".join(s.strip() for s in lines[1:]).strip()
+
+            content = f"{product_title}\n{description}".strip()
+            hierarchy = f"{file_name} -> {product_index}. {product_title}"
+
+            _id = str(uuid.uuid4())
+            metadata = {
+                "doc_id": _id,
+                "summary": "",
+                "page_content": content,
+                "hierarchy": hierarchy,
+                "page": int(product_index) if product_index.isdigit() else i + 1,
+                "file_name": file_name,
+                "file_type": "products_txt",
+                "chunk_index": 0,
+                "page_image_base64": "",
+                "product_title": product_title,
+                "product_index": product_index,
+            }
+
+            docs.append(Document(page_content=content.lower(), metadata=metadata))
+            doc_ids.append(_id)
+
+    except Exception as e:
+        print(f"Error in node_structured_products_text: {e}")
+
+    return docs, doc_ids
 
 
 
