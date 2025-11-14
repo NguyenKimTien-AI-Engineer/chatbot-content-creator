@@ -21,7 +21,7 @@ def test_simple_upload():
     print("-" * 50)
     
     # Bước 1: Upload file qua API
-    upload_url = "http://localhost:1945/api/v1/upload-files"
+    upload_url = "http://localhost:1953/api/v1/upload-files"
     
     with open(pdf_path, 'rb') as f:
         files = {'file': (filename, f, 'application/pdf')}
@@ -72,7 +72,7 @@ def test_simple_upload():
     collection_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in collection_name)
     collection_name = '_'.join(filter(None, collection_name.split('_')))
     
-    save_collection_url = "http://localhost:1945/api/v1/qdrant/collections/user"
+    save_collection_url = "http://localhost:1953/api/v1/qdrant/collections/user"
     
     collection_data = {
         "user_id": "test_user",
@@ -104,7 +104,7 @@ def test_simple_upload():
     # Bước 3: Kiểm tra danh sách collections
     print(f"📋 Kiểm tra danh sách collections...")
     
-    get_collections_url = "http://localhost:1945/api/v1/qdrant/collections/user/test_user"
+    get_collections_url = "http://localhost:1953/api/v1/qdrant/collections/user/test_user"
     
     try:
         response = requests.get(get_collections_url)
@@ -138,6 +138,6 @@ if __name__ == "__main__":
     print("✅ Hoàn thành test!")
     
     print("\n💡 Hướng dẫn:")
-    print("1. Đảm bảo server đang chạy trên localhost:1945")
+    print("1. Đảm bảo server đang chạy trên localhost:1953")
     print("2. File PDF nằm ở đúng đường dẫn")
     print("3. Kiểm tra Qdrant để xem collection đã được tạo chưa")

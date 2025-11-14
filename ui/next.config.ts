@@ -31,7 +31,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     // Use environment variables for API proxy in development
     const apiHost = process.env.NEXT_PUBLIC_SERVER_HOST || 'localhost';
-    const apiPort = process.env.NEXT_PUBLIC_API_PORT || '1945';
+    const apiPort = process.env.NEXT_PUBLIC_API_PORT || '1953';
     
     return [
       {
