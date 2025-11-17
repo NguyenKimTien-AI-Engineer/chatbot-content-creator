@@ -1,0 +1,136 @@
+PS D:\Document\Python_project\mekongai-content-creator> python test.py
+
+============================================================
+Test 1/2: VPS (localhost)
+============================================================
+
+============================================================
+🚀 Testing Streaming API
+============================================================
+
+📍 URL: http://127.0.0.1:1979/api/v1/chatbot-custom-prompt-stream
+📦 Payload:
+{
+  "user_id": "default_user",
+  "query": "bạn biết gì về kát",
+  "collections": [],
+  "session_id": "demo",
+  "history_id": "demo",
+  "system_instruction_user": "",
+  "include_products": true
+}
+
+📋 Headers:
+  Content-Type: application/json
+  Accept: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+
+⏳ Connecting...
+
+✅ Connected! (took 0.91s)
+📊 Status Code: 200
+
+📋 Response Headers:
+  date: Mon, 17 Nov 2025 07:08:44 GMT
+  server: uvicorn
+  cache-control: no-cache
+  connection: keep-alive
+  x-accel-buffering: no
+  content-type: text/event-stream; charset=utf-8
+  transfer-encoding: chunked
+
+📡 Streaming Response:
+------------------------------------------------------------
+📦 Chunk 78: KAT Leather là một thương hiệu túi xách da thật hàng đầu tại Việt Nam, được thành lập từ năm 2009. Thương hiệu này nổi bật với triết lý thiết kế thanh lịch, tinh tế và chú trọng vào chất lượng sản phẩm, hướng đến những người phụ nữ hiện đại, yêu thích sự bền vững và phong cách sống chỉn chu.
+📦 Chunk 92: Một số điểm đặc trưng của KAT có thể kể đến:
+📦 Chunk 110: **1. Chất liệu da thật nguyên miếng (da lớp 1):**
+📦 Chunk 168: Toàn bộ sản phẩm của KAT đều sử dụng da thật cao cấp, đảm bảo độ bền, độ mềm mại và giữ phom dáng lâu dài. Đây là yếu tố giúp túi xách KAT không chỉ đẹp mà còn bền bỉ theo thời gian.
+📦 Chunk 181: **2. Thiết kế tối giản, thanh lịch:**
+📦 Chunk 251: KAT ưu tiên các đường nét tinh gọn, màu sắc trang nhã, dễ phối đồ và phù hợp với nhiều hoàn cảnh sử dụng – từ công sở, dạo phố đến dự tiệc. Mỗi thiết kế đều hướng đến sự ứng dụng cao, giúp người dùng dễ dàng thể hiện phong cách cá nhân một cách tinh tế.
+📦 Chunk 263: **3. Chính sách bảo hành trọn đời:**
+📦 Chunk 320: KAT cam kết bảo hành da thật và kỹ thuật trọn đời sản phẩm, đồng thời miễn phí làm sạch căn bản không giới hạn số lần. Điều này thể hiện sự tận tâm và trách nhiệm với khách hàng, giúp khách hàng yên tâm khi lựa chọn sản phẩm.
+📦 Chunk 332: **4. Dịch vụ khách hàng tận tâm:**
+📦 Chunk 381: Khách hàng có thể tham khảo hàng ngàn review thực tế từ cộng đồng, được hỗ trợ COD & miễn phí vận chuyển toàn quốc cho đơn hàng nguyên giá từ 1 triệu đồng, có thể kiểm tra hàng trước khi thanh toán.
+📦 Chunk 430: KAT không chỉ là một thương hiệu túi xách, mà còn là người bạn đồng hành cùng những người phụ nữ hiện đại, giúp họ thể hiện phong cách cá nhân một cách tinh tế và bền vững theo thời gian.
+📦 Chunk 467: Nếu bạn muốn tìm hiểu sâu hơn về các dòng sản phẩm, phong cách thiết kế hoặc những điểm nổi bật khác của KAT, mình sẵn sàng hỗ trợ thêm nhé.
+📦 Chunk 469: {"metadata": {"reference": []}}
+
+------------------------------------------------------------
+✅ Streaming completed!
+📊 Statistics:
+  - Total chunks: 468
+  - Total time: 21.41s
+  - Content length: 0 chars
+
+⚠️  Warning: No content received!
+
+⏳ Waiting 2s before next test...
+
+============================================================
+Test 2/2: VPS (public IP)
+============================================================
+
+============================================================
+🚀 Testing Streaming API
+============================================================
+
+📍 URL: http://144.91.113.233:1979/api/v1/chatbot-custom-prompt-stream
+📦 Payload:
+{
+  "user_id": "default_user",
+  "query": "xin chào",
+  "collections": [],
+  "session_id": "demo",
+  "history_id": "demo",
+  "system_instruction_user": "",
+  "include_products": true
+}
+
+📋 Headers:
+  Content-Type: application/json
+  Accept: text/event-stream
+  Cache-Control: no-cache
+  Connection: keep-alive
+
+⏳ Connecting...
+
+✅ Connected! (took 0.75s)
+📊 Status Code: 200
+
+📋 Response Headers:
+  date: Mon, 17 Nov 2025 07:09:09 GMT
+  server: uvicorn
+  cache-control: no-cache
+  connection: keep-alive
+  x-accel-buffering: no
+  content-type: text/event-stream; charset=utf-8
+  transfer-encoding: chunked
+
+📡 Streaming Response:
+------------------------------------------------------------
+📦 Chunk 5: Xin chào bạn,
+📦 Chunk 19: Cảm ơn bạn đã ghé thăm KAT Leather.
+📦 Chunk 61: Mình luôn sẵn sàng lắng nghe và hỗ trợ bạn về mọi thông tin liên quan đến sản phẩm, phong cách phối đồ, hoặc các vấn đề về content marketing cho thương hiệu KAT.
+📦 Chunk 97: Bạn đang quan tâm đến sản phẩm cụ thể, muốn tìm hiểu về cách phối đồ, hay có nhu cầu tham khảo về cách xây dựng nội dung marketing cho KAT?  
+📦 Chunk 126: Bạn có thể chia sẻ thêm về mong muốn hoặc câu hỏi của mình để mình hỗ trợ bạn một cách tận tâm và phù hợp nhất nhé!
+📦 Chunk 128: {"metadata": {"reference": []}}
+
+------------------------------------------------------------
+✅ Streaming completed!
+📊 Statistics:
+  - Total chunks: 127
+  - Total time: 4.33s
+  - Content length: 0 chars
+
+⚠️  Warning: No content received!
+
+============================================================
+📊 Test Summary
+============================================================
+
+❌ FAILED - VPS (localhost)
+  Error: No content in response
+
+❌ FAILED - VPS (public IP)
+  Error: No content in response
