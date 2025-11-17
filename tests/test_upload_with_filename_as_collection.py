@@ -29,7 +29,7 @@ async def upload_pdf_with_filename_as_collection():
     # Bước 1: Upload file
     print("🔄 Bước 1: Upload file PDF...")
     
-    upload_url = "http://localhost:1953/api/v1/upload-files"
+    upload_url = "http://localhost:1979/api/v1/upload-files"
     
     files = {
         'file': (pdf_path.name, file_content, 'application/pdf')
@@ -77,7 +77,7 @@ async def upload_pdf_with_filename_as_collection():
     
     print(f"📁 Collection name theo filename: {collection_name}")
     
-    save_collection_url = "http://localhost:1953/api/v1/qdrant/collections/user"
+    save_collection_url = "http://localhost:1979/api/v1/qdrant/collections/user"
     
     collection_data = {
         "user_id": "test_user_filename",
@@ -129,7 +129,7 @@ async def test_multiple_files_with_filename_collections():
         async with aiofiles.open(pdf_path, 'rb') as f:
             file_content = await f.read()
         
-        upload_url = "http://localhost:1953/api/v1/upload-files"
+        upload_url = "http://localhost:1979/api/v1/upload-files"
         
         files = {
             'file': (pdf_path.name, file_content, 'application/pdf')
@@ -157,7 +157,7 @@ async def test_multiple_files_with_filename_collections():
                 print(f"📁 Collection name: {collection_name}")
                 
                 # Lưu collection với tên theo filename
-                save_collection_url = "http://localhost:1953/api/v1/qdrant/collections/user"
+                save_collection_url = "http://localhost:1979/api/v1/qdrant/collections/user"
                 
                 collection_data = {
                     "user_id": "test_user_multiple",
@@ -188,8 +188,8 @@ async def get_collections_info():
     """
     
     api_urls = [
-        "http://localhost:1953/api/v1/qdrant/collections/user/test_user_filename",
-        "http://localhost:1953/api/v1/qdrant/collections/user/test_user_multiple"
+        "http://localhost:1979/api/v1/qdrant/collections/user/test_user_filename",
+        "http://localhost:1979/api/v1/qdrant/collections/user/test_user_multiple"
     ]
     
     for url in api_urls:
