@@ -343,6 +343,7 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         stop_yielding = False
 
         ans_ref = ""
+        buffer = ""
 
         # Lưu lịch sử: khởi tạo hội thoại và ghi message của user
         try:
@@ -363,16 +364,33 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
                 chunk = " " + chunk
 
             if not stop_yielding:
-                answer += chunk
-                # Chuẩn SSE: mỗi chunk được gói trong "data: ..." và kết thúc bằng \n\n
-                try:
-                    sse_payload = json.dumps({"content": chunk}, ensure_ascii=False)
-                except Exception:
-                    # Fallback nếu có ký tự không serializable
-                    sse_payload = json.dumps({"content": str(chunk)})
-                yield f"data: {sse_payload}\n\n"
+                # Bỏ qua chunk rỗng/space-only để tránh sự kiện trống
+                if chunk and chunk.strip() != "":
+                    # Gom chunk để tránh gửi ký tự lẻ
+                    buffer += chunk
+                    should_flush = (
+                        buffer.endswith((" ", ".", ",", "!", "?", "\n"))
+                        or len(buffer) >= 32
+                    )
+                    if should_flush:
+                        answer += buffer
+                        try:
+                            sse_payload = json.dumps({"content": buffer}, ensure_ascii=False)
+                        except Exception:
+                            sse_payload = json.dumps({"content": str(buffer)})
+                        yield f"data: {sse_payload}\r\n\r\n"
+                        buffer = ""
             else:
                 ans_ref += chunk
+
+        # Flush phần buffer còn lại nếu có
+        if buffer:
+            answer += buffer
+            try:
+                sse_payload_tail = json.dumps({"content": buffer}, ensure_ascii=False)
+            except Exception:
+                sse_payload_tail = json.dumps({"content": str(buffer)})
+            yield f"data: {sse_payload_tail}\r\n\r\n"
 
         pages = reference.extract_reference_document_numbers(ans_ref)
         print("pages: ", pages)
@@ -384,10 +402,10 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
             meta_payload = json.dumps({"metadata": {"reference": filter_references}}, ensure_ascii=False)
         except Exception:
             meta_payload = json.dumps({"metadata": {"reference": []}})
-        yield f"data: {meta_payload}\n\n"
+        yield f"data: {meta_payload}\r\n\r\n"
 
         # Kết thúc stream theo chuẩn SSE
-        yield "data: [DONE]\n\n"
+        yield "data: [DONE]\r\n\r\n"
 
         answer = clean.clean_special_characters(answer)
 

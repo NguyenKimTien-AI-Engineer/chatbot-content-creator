@@ -460,41 +460,104 @@ async function streamChat(
   }
 
   const decoder = new TextDecoder();
-  let bufferMeta = "";
-  let metaStarted = false;
+  let sseBuffer = "";
+  let sawDone = false;
+  const extractNextEvent = () => {
+    const idxCRLF = sseBuffer.indexOf("\r\n\r\n");
+    const idxLF = sseBuffer.indexOf("\n\n");
+    let idx = -1;
+    let delimLen = 0;
+    if (idxCRLF >= 0 && idxLF >= 0) {
+      idx = Math.min(idxCRLF, idxLF);
+      delimLen = idx === idxCRLF ? 4 : 2;
+    } else if (idxCRLF >= 0) {
+      idx = idxCRLF;
+      delimLen = 4;
+    } else if (idxLF >= 0) {
+      idx = idxLF;
+      delimLen = 2;
+    }
+    if (idx < 0) return null;
+    const ev = sseBuffer.slice(0, idx);
+    sseBuffer = sseBuffer.slice(idx + delimLen);
+    return ev;
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
     if (!chunk) continue;
-    const trimmed = chunk.trim();
-
-    // Detect metadata JSON anywhere in the chunk and separate it from content
-    const metaIdx = chunk.indexOf('{"metadata"');
-    if (metaIdx >= 0) {
-      const before = chunk.slice(0, metaIdx);
-      if (before.trim()) onChunk(before);
-      metaStarted = true;
-      bufferMeta += chunk.slice(metaIdx);
-      continue;
+    sseBuffer += chunk;
+    let evRaw: string | null;
+    while ((evRaw = extractNextEvent()) !== null) {
+      const lines = evRaw.split(/\r?\n/);
+      const dataParts: string[] = [];
+      for (const line of lines) {
+        const m = line.match(/^\s*data\s*:\s?(.*)$/);
+        if (m) dataParts.push(m[1]);
+      }
+      if (dataParts.length === 0) continue;
+      const payloadStr = dataParts.join("\n");
+      const trimmed = payloadStr.trim();
+      if (trimmed === "[DONE]") {
+        sawDone = true;
+        break;
+      }
+      // Chart sentinel support if content is plain text
+      if (trimmed.includes(CHART_SENTINEL)) {
+        onGenerateChartFlag();
+      }
+      // Try JSON first, fallback to plain text
+      try {
+        const obj = JSON.parse(trimmed);
+        if (obj && typeof obj === "object") {
+          if (obj.metadata) {
+            onMeta(obj.metadata);
+            continue;
+          }
+          if (obj.content != null) {
+            const text = String(obj.content);
+            if (text.includes(CHART_SENTINEL)) onGenerateChartFlag();
+            onChunk(text);
+            continue;
+          }
+        }
+        // If object but no known keys, emit its string form
+        onChunk(String(obj));
+      } catch {
+        onChunk(trimmed);
+      }
     }
-    if (metaStarted) {
-      bufferMeta += chunk;
-      continue;
-    }
-    if (chunk.includes(CHART_SENTINEL)) {
-      onGenerateChartFlag();
-      continue;
-    }
-    onChunk(chunk);
+    if (sawDone) break;
   }
 
-  if (bufferMeta) {
+  // Parse any remaining buffered event(s) after stream ends
+  let leftover: string | null;
+  while ((leftover = extractNextEvent()) !== null && !sawDone) {
+    const lines = leftover.split(/\r?\n/);
+    const dataParts: string[] = [];
+    for (const line of lines) {
+      const m = line.match(/^\s*data\s*:\s?(.*)$/);
+      if (m) dataParts.push(m[1]);
+    }
+    if (dataParts.length === 0) continue;
+    const payloadStr = dataParts.join("\n");
+    const trimmed = payloadStr.trim();
+    if (trimmed === "[DONE]") break;
     try {
-      const parsed = JSON.parse(bufferMeta);
-      if (parsed?.metadata) onMeta(parsed.metadata);
-    } catch (e) {
-      console.warn("Failed to parse metadata", e);
+      const obj = JSON.parse(trimmed);
+      if (obj?.metadata) {
+        onMeta(obj.metadata);
+        continue;
+      }
+      if (obj?.content != null) {
+        onChunk(String(obj.content));
+        continue;
+      }
+      onChunk(String(obj));
+    } catch {
+      onChunk(trimmed);
     }
   }
 }
