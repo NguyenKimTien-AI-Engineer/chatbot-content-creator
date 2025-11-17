@@ -364,7 +364,13 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
 
             if not stop_yielding:
                 answer += chunk
-                yield chunk
+                # Chuẩn SSE: mỗi chunk được gói trong "data: ..." và kết thúc bằng \n\n
+                try:
+                    sse_payload = json.dumps({"content": chunk}, ensure_ascii=False)
+                except Exception:
+                    # Fallback nếu có ký tự không serializable
+                    sse_payload = json.dumps({"content": str(chunk)})
+                yield f"data: {sse_payload}\n\n"
             else:
                 ans_ref += chunk
 
@@ -373,7 +379,15 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
 
         filter_references = reference.filter_reference_from_page(references, pages)
 
-        yield json.dumps({"metadata": {"reference": filter_references}})
+        # Gửi metadata tham chiếu theo chuẩn SSE
+        try:
+            meta_payload = json.dumps({"metadata": {"reference": filter_references}}, ensure_ascii=False)
+        except Exception:
+            meta_payload = json.dumps({"metadata": {"reference": []}})
+        yield f"data: {meta_payload}\n\n"
+
+        # Kết thúc stream theo chuẩn SSE
+        yield "data: [DONE]\n\n"
 
         answer = clean.clean_special_characters(answer)
 
