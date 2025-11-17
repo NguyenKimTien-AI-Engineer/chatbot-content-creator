@@ -327,7 +327,7 @@ function getApiPaths(path: string) {
   let base = apiUrl;
   if (!base) {
     const host = process.env.NEXT_PUBLIC_SERVER_HOST || "localhost";
-    const port = process.env.NEXT_PUBLIC_API_PORT || "1953";
+    const port = process.env.NEXT_PUBLIC_API_PORT || "1979";
     base = `http://${host}:${port}`;
   }
   return {

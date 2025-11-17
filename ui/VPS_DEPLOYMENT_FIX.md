@@ -122,3 +122,42 @@ Sau khi fix:
 2. **Port Backend**: Đảm bảo backend chạy trên port 8001
 3. **CORS**: Backend cần allow origin từ frontend domain
 4. **SSL**: Nên setup SSL certificate cho production
+
+## SSE Streaming (Chat) trên VPS
+
+Để trả lời từng ký tự (character-by-character) khi deploy lên VPS, cần vô hiệu hóa buffer/caching ở proxy (Nginx/CDN) và đảm bảo backend gửi đúng headers SSE.
+
+- Backend đã được cập nhật để trả về các headers SSE: `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`.
+- Cấu hình Nginx khuyến nghị (áp dụng cho các route stream):
+
+```nginx
+# File mẫu: resources/docs/nginx-sse.conf
+location ~* ^/api/v1/(chatbot-custom-prompt-stream|chatbot-chart-stream|chatbot-basic-stream|chatbot-reference-stream|agent-kat-stream|agent-province-merger-stream)$ {
+    proxy_pass http://127.0.0.1:1979;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    proxy_send_timeout 600s;
+    proxy_read_timeout 600s;
+    send_timeout 600s;
+    proxy_set_header X-Accel-Buffering no;
+    add_header Cache-Control "no-cache";
+    add_header X-Accel-Buffering "no";
+    gzip off;
+}
+```
+
+Kiểm tra nhanh bằng `curl` (nên thấy dữ liệu đổ về từng dòng):
+
+```bash
+curl -N -H "Accept: text/event-stream" -H "Content-Type: application/json" \
+    -d '{"user_id":"default_user","query":"Xin chào","collections":[],"session_id":"demo","history_id":"demo","system_instruction_user":"","include_products":true}' \
+    http://YOUR_DOMAIN_OR_IP/api/v1/chatbot-custom-prompt-stream
+```
+
+Gợi ý cấu hình UI để tránh proxy buffer:
+
+- Đặt `NEXT_PUBLIC_API_URL` trỏ thẳng về API (ví dụ `http://YOUR_DOMAIN_OR_IP:8001`), UI sẽ ưu tiên dùng đường dẫn tuyệt đối cho các call streaming.
+- Đảm bảo Node.js trên VPS `>= 18` để `ReadableStream` hoạt động ổn định.

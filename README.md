@@ -159,7 +159,7 @@ docker pull mekongaidnhk/mekongai-template:latest
 
 docker run -d -p 8066:8066 \
   --name mekongai-template \
-  -e PORT=1953 \
+  -e PORT=1979 \
   -e USER_AGENT="MEKONGAI" \
   -e SERVER_ADDRESS="http://<host>:8066" \
   -e OPENAI_API_BASE_URL="https://api.openai.com/v1" \

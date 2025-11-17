@@ -146,7 +146,15 @@ async def chatbot_basic_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -257,7 +265,15 @@ async def chatbot_reference_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -310,7 +326,15 @@ async def chatbot_chart_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -414,7 +438,15 @@ async def chatbot_custom_prompt_stream_endpoint(request: ChatbotCustomPromptRequ
             request.include_products,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -465,7 +497,15 @@ async def agent_province_merger_stream_endpoint(request: AgentProvinceMerger):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -490,7 +530,15 @@ async def agent_kat_stream_endpoint(request: AgentKAT):
             request.prompt,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
