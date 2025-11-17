@@ -38,3 +38,4 @@ streamlit
 deep-translator
 transformers
 tiktoken
+unidecode
