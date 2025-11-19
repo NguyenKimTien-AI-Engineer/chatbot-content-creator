@@ -576,11 +576,11 @@ export default function ModernChatPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string>("");
-  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
-  const [imageAnalysisText, setImageAnalysisText] = useState<string>("");
+  const [attachedPreviews, setAttachedPreviews] = useState<string[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [imageAnalyses, setImageAnalyses] = useState<string[]>([]);
   const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
-  const [showEmojiMenu, setShowEmojiMenu] = useState<boolean>(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -613,16 +613,16 @@ export default function ModernChatPage() {
   }, [uploadError]);
 
   const handleSendMessage = async () => {
-    if (input.trim() === "" && imageFiles.length === 0) return;
+    if (input.trim() === "" && attachedFiles.length === 0) return;
 
     const now = Date.now();
-    const defaultSingle = "Phân tích ảnh và cảm nhận hình ảnh này";
+    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
     const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
-    const imageCount = Math.min(imagePreviews.length, imageFiles.length);
-    const autoText = imageCount >= 2 ? defaultTwo : defaultSingle;
-    const textToSend = input.trim() !== "" ? input.trim() : autoText;
-    const contentToSend: any = imagePreviews.length > 0
-      ? { text: textToSend, images: imagePreviews.slice(0, 2) }
+    const textToSend = input.trim() !== ""
+      ? input.trim()
+      : (attachedFiles.length >= 2 ? defaultTwo : defaultOne);
+    const contentToSend: any = attachedPreviews.length > 0
+      ? { text: textToSend, images: attachedPreviews.slice(0, 2) }
       : textToSend;
     const userMessage: ChatMessage = {
       id: now.toString(),
@@ -648,21 +648,20 @@ export default function ModernChatPage() {
       chatbotType = "chart";
     }
     // Nếu là tin nhắn mặc định khi có ảnh, không kích hoạt chart
-    const defaultSet = [defaultSingle.toLowerCase(), defaultTwo.toLowerCase()];
-    if (imageFiles.length > 0 && defaultSet.includes(queryLower)) {
+    if ((queryLower === defaultOne.toLowerCase() || queryLower === defaultTwo.toLowerCase()) && attachedFiles.length > 0) {
       chatbotType = "reference";
     }
 
-    let imageTextToSend = imageAnalysisText;
-    if (!imageTextToSend && imageFiles.length > 0) {
-      const texts: string[] = [];
-      for (const f of imageFiles.slice(0, 2)) {
-        const t = await analyzeImageFile(f);
-        if (t) texts.push(t);
+    // Đảm bảo có phân tích cho các ảnh đã đính kèm
+    const analyses: string[] = [...imageAnalyses];
+    for (let i = 0; i < attachedFiles.length && i < 2; i++) {
+      if (!analyses[i]) {
+        const txt = await analyzeImageFile(attachedFiles[i]);
+        analyses[i] = txt || "";
       }
-      imageTextToSend = texts.join("\n\n---\n");
-      setImageAnalysisText(imageTextToSend);
     }
+    setImageAnalyses(analyses);
+    const joinImageAnalyses = (arr: string[]) => arr.slice(0, 2).map((t, i) => `Ảnh ${i + 1}: ${t}`).join("\n\n");
 
     const payload = {
       user_id: userId,
@@ -672,14 +671,16 @@ export default function ModernChatPage() {
       history_id: "",
       system_instruction_user: systemInstructionUser,
       include_products: true,
-      image_text: imageTextToSend || "",
+      image_text: joinImageAnalyses(analyses),
     };
 
-    // Xóa preview ảnh khỏi khung nhập ngay sau khi chuẩn bị payload
-    setImagePreviews([]);
-    setImageFiles([]);
+    // Xóa preview/đính kèm ảnh khỏi khung nhập ngay sau khi chuẩn bị payload
+    attachedPreviews.forEach((url) => { try { URL.revokeObjectURL(url); } catch { /* noop */ } });
+    setAttachedPreviews([]);
+    setAttachedFiles([]);
+    setImageAnalyses([]);
     setShowPlusMenu(false);
-    setShowEmojiMenu(false);
+    setShowEmojiPicker(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
 
     const assistantId = (Date.now() + 1).toString();
@@ -778,28 +779,20 @@ export default function ModernChatPage() {
 
   const handleFileSelected = async (e: any) => {
     const files: File[] = Array.from(e?.target?.files || []);
-    if (files.length === 0) return;
+    if (!files.length) return;
     setUploadError(null);
 
-    const imageCandidates = files.filter((f) => f.type?.startsWith("image/"));
-    const nonImage = files.find((f) => !f.type?.startsWith("image/"));
-
-    if (imageCandidates.length > 0) {
+    // Ảnh: thêm vào danh sách đính kèm, tối đa 2 ảnh
+    const imageFiles = files.filter((f) => f.type?.startsWith("image/"));
+    if (imageFiles.length > 0) {
       try {
-        let added = 0;
-        for (const file of imageCandidates) {
-          if (imageFiles.length + added >= 2) {
-            setUploadError("Chỉ cho phép tối đa 2 hình ảnh cho mỗi lần gửi.");
-            break;
-          }
+        for (const file of imageFiles) {
+          if (attachedFiles.length >= 2) break;
           const url = URL.createObjectURL(file);
-          setImagePreviews((prev) => [...prev, url]);
-          setImageFiles((prev) => [...prev, file]);
+          setAttachedPreviews((prev) => (prev.length < 2 ? [...prev, url] : prev));
+          setAttachedFiles((prev) => (prev.length < 2 ? [...prev, file] : prev));
           const analysis = await analyzeImageFile(file);
-          if (analysis) {
-            setImageAnalysisText((prev) => prev ? `${prev}\n\n---\n${analysis}` : analysis);
-          }
-          added += 1;
+          setImageAnalyses((prev) => (prev.length < 2 ? [...prev, analysis] : prev));
         }
       } catch (err: any) {
         setUploadError(String(err?.message || err));
@@ -809,52 +802,51 @@ export default function ModernChatPage() {
       return;
     }
 
-    if (nonImage) {
-      // File không phải ảnh: quy trình upload bình thường
-      setIsUploading(true);
-      try {
-        const form = new FormData();
-        form.append("user_id", userId || "default");
-        form.append("collection_name", DEFAULT_COLLECTION);
-        form.append("file", nonImage);
-        form.append("language", "vie+eng");
-        form.append("note", "");
+    // File không phải ảnh: quy trình upload bình thường
+    const file = files[0];
+    setIsUploading(true);
+    try {
+      const form = new FormData();
+      form.append("user_id", userId || "default");
+      form.append("collection_name", DEFAULT_COLLECTION);
+      form.append("file", file);
+      form.append("language", "vie+eng");
+      form.append("note", "");
 
-        const paths = getApiPaths("/api/v1/upload-to-collection");
-        let res: Response | null = null;
-        try {
-          res = await fetch(paths.relative, { method: "POST", body: form });
-        } catch (err) {
-          if (paths.absolute) {
-            res = await fetch(paths.absolute, { method: "POST", body: form });
-          } else {
-            throw err;
-          }
-        }
-        if (!res || !res.ok) {
-          const msg = await (res ? res.text() : Promise.resolve("Network error"));
-          setUploadError(msg || "Upload failed");
+      const paths = getApiPaths("/api/v1/upload-to-collection");
+      let res: Response | null = null;
+      try {
+        res = await fetch(paths.relative, { method: "POST", body: form });
+      } catch (err) {
+        if (paths.absolute) {
+          res = await fetch(paths.absolute, { method: "POST", body: form });
         } else {
-          let data: any = null;
-          try {
-            data = await res.json();
-          } catch {
-            data = null;
-          }
-          const fileName = nonImage?.name || "tập tin";
-          const points = data?.total_saved_points ?? data?.count ?? null;
-          const msgParts: string[] = [];
-          msgParts.push(`Đã tải và xử lý xong: ${fileName}`);
-          if (typeof points === "number") msgParts.push(`(${points} đoạn)`);
-          setUploadMessage(msgParts.join(" "));
-          setUploadSuccess(true);
+          throw err;
         }
-      } catch (err: any) {
-        setUploadError(String(err?.message || err));
-      } finally {
-        setIsUploading(false);
-        if (fileInputRef.current) fileInputRef.current.value = "";
       }
+      if (!res || !res.ok) {
+        const msg = await (res ? res.text() : Promise.resolve("Network error"));
+        setUploadError(msg || "Upload failed");
+      } else {
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        const fileName = file?.name || "tập tin";
+        const points = data?.total_saved_points ?? data?.count ?? null;
+        const msgParts: string[] = [];
+        msgParts.push(`Đã tải và xử lý xong: ${fileName}`);
+        if (typeof points === "number") msgParts.push(`(${points} đoạn)`);
+        setUploadMessage(msgParts.join(" "));
+        setUploadSuccess(true);
+      }
+    } catch (err: any) {
+      setUploadError(String(err?.message || err));
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -862,39 +854,22 @@ export default function ModernChatPage() {
     try {
       const items = e.clipboardData?.items || [];
       for (let i = 0; i < items.length; i++) {
+        if (attachedFiles.length >= 2) break;
         const it = items[i];
         if (it && it.type && it.type.startsWith("image/")) {
-          if (imageFiles.length >= 2) {
-            setUploadError("Chỉ cho phép tối đa 2 hình ảnh cho mỗi lần gửi.");
-            break;
-          }
           const blob = it.getAsFile();
           if (!blob) continue;
           const file = new File([blob], `pasted-${Date.now()}.png`, { type: blob.type || "image/png" });
           const url = URL.createObjectURL(blob);
-          setImagePreviews((prev) => [...prev, url]);
-          setImageFiles((prev) => [...prev, file]);
+          setAttachedPreviews((prev) => (prev.length < 2 ? [...prev, url] : prev));
+          setAttachedFiles((prev) => (prev.length < 2 ? [...prev, file] : prev));
           const analysis = await analyzeImageFile(file);
-          if (analysis) {
-            setImageAnalysisText((prev) => prev ? `${prev}\n\n---\n${analysis}` : analysis);
-          }
-          if (imageFiles.length + 1 >= 2) break;
+          setImageAnalyses((prev) => (prev.length < 2 ? [...prev, analysis] : prev));
         }
       }
     } catch (err) {
       console.warn("Paste image failed", err);
     }
-  };
-
-  const removeImageAt = (index: number) => {
-    setImagePreviews((prev) => prev.filter((_, i) => i !== index));
-    setImageFiles((prev) => prev.filter((_, i) => i !== index));
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const insertEmoji = (emoji: string) => {
-    setInput((prev) => (prev || "") + emoji);
-    inputRef.current?.focus();
   };
 
   const formatTime = (date: Date) => {
@@ -928,18 +903,23 @@ export default function ModernChatPage() {
                       className="hidden"
                       onChange={handleFileSelected}
                     />
-                    {imagePreviews.length > 0 && (
+                    {attachedPreviews.length > 0 && (
                       <div className="mb-3 flex flex-wrap gap-2">
-                        {imagePreviews.map((preview, idx) => (
+                        {attachedPreviews.slice(0, 2).map((src, idx) => (
                           <div key={idx} className="inline-block relative">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={preview}
-                              alt="attachment-preview"
+                              src={src}
+                              alt={`attachment-preview-${idx}`}
                               className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
                             />
                             <button
-                              onClick={() => removeImageAt(idx)}
+                              onClick={() => {
+                                try { URL.revokeObjectURL(src); } catch { /* noop */ }
+                                setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
+                                setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+                                setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
+                              }}
                               className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
                               title="Xóa ảnh"
                             >
@@ -982,23 +962,27 @@ export default function ModernChatPage() {
                         </div>
                         <div className="relative">
                           <button
-                            onClick={() => setShowEmojiMenu((s) => !s)}
                             className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            title="Emoji"
+                            onClick={() => setShowEmojiPicker((s) => !s)}
+                            title="Chèn biểu tượng cảm xúc"
                           >
                             <Smile className="w-5 h-5 text-gray-400" />
                           </button>
-                          {showEmojiMenu && (
-                            <div className="absolute z-10 mt-2 w-36 rounded-xl border border-gray-200 bg-white shadow-md p-2 flex flex-wrap gap-1">
-                              {['😀','😊','👍','❤️','🔥','🎉','🙏','🤔','😎','🥳'].map((e) => (
+                          {showEmojiPicker && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
+                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
                                 <button
-                                  key={e}
-                                  onClick={() => { insertEmoji(e); setShowEmojiMenu(false); }}
-                                  className="px-2 py-1 rounded hover:bg-gray-50 text-lg"
-                                  aria-label={`emoji-${e}`}
-                                >
-                                  {e}
-                                </button>
+                                  key={emo}
+                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
+                                  onClick={() => {
+                                    const base = input.trim();
+                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
+                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
+                                    setShowEmojiPicker(false);
+                                  }}
+                                >{emo}</button>
                               ))}
                             </div>
                           )}
@@ -1006,7 +990,7 @@ export default function ModernChatPage() {
                       </div>
                       <button
                         onClick={handleSendMessage}
-                        disabled={!input.trim() && imageFiles.length === 0}
+                        disabled={!input.trim() && attachedFiles.length === 0}
                         className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                       >
                         <Send className="w-5 h-5" />
@@ -1180,34 +1164,39 @@ export default function ModernChatPage() {
                 )}
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileSelected}
-                  />
-                  {imagePreviews.length > 0 && (
-                    <div className="mb-3 flex flex-wrap gap-2">
-                      {imagePreviews.map((preview, idx) => (
-                        <div key={idx} className="inline-block relative">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={preview}
-                            alt="attachment-preview"
-                            className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
-                          />
-                          <button
-                            onClick={() => removeImageAt(idx)}
-                            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
-                            title="Xóa ảnh"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={handleFileSelected}
+                    />
+                    {attachedPreviews.length > 0 && (
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {attachedPreviews.slice(0, 2).map((src, idx) => (
+                          <div key={idx} className="inline-block relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={src}
+                              alt={`attachment-preview-${idx}`}
+                              className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
+                            />
+                            <button
+                              onClick={() => {
+                                try { URL.revokeObjectURL(src); } catch { /* noop */ }
+                                setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
+                                setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+                                setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
+                              }}
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
+                              title="Xóa ảnh"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="relative">
                       <input
                         ref={inputRef}
@@ -1219,57 +1208,61 @@ export default function ModernChatPage() {
                         className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
                       />
                       <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowPlusMenu((s) => !s)}
-                        disabled={isUploading}
-                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title={isUploading ? "Đang tải..." : "Thêm"}
-                      >
-                        <Plus className="w-5 h-5 text-gray-400" />
-                      </button>
-                      {showPlusMenu && (
-                        <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                        <div className="relative">
                           <button
-                            onClick={handleAttachClick}
-                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                            onClick={() => setShowPlusMenu((s) => !s)}
+                            disabled={isUploading}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title={isUploading ? "Đang tải..." : "Thêm"}
                           >
-                            Add photos & files
+                            <Plus className="w-5 h-5 text-gray-400" />
                           </button>
+                          {showPlusMenu && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                              <button
+                                onClick={handleAttachClick}
+                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                              >
+                                Add photos & files
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowEmojiMenu((s) => !s)}
-                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title="Emoji"
-                      >
-                        <Smile className="w-5 h-5 text-gray-400" />
-                      </button>
-                      {showEmojiMenu && (
-                        <div className="absolute z-10 mt-2 w-36 rounded-xl border border-gray-200 bg-white shadow-md p-2 flex flex-wrap gap-1">
-                          {['😀','😊','👍','❤️','🔥','🎉','🙏','🤔','😎','🥳'].map((e) => (
-                            <button
-                              key={e}
-                              onClick={() => { insertEmoji(e); setShowEmojiMenu(false); }}
-                              className="px-2 py-1 rounded hover:bg-gray-50 text-lg"
-                              aria-label={`emoji-${e}`}
-                            >
-                              {e}
-                            </button>
-                          ))}
+                        <div className="relative">
+                          <button
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            onClick={() => setShowEmojiPicker((s) => !s)}
+                            title="Chèn biểu tượng cảm xúc"
+                          >
+                            <Smile className="w-5 h-5 text-gray-400" />
+                          </button>
+                          {showEmojiPicker && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
+                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
+                                <button
+                                  key={emo}
+                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
+                                  onClick={() => {
+                                    const base = input.trim();
+                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
+                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
+                                    setShowEmojiPicker(false);
+                                  }}
+                                >{emo}</button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
                       </div>
-                <button
-                  onClick={handleSendMessage}
-                  disabled={!input.trim() && imageFiles.length === 0}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
+                      <button
+                        onClick={handleSendMessage}
+                        disabled={!input.trim() && attachedFiles.length === 0}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                      >
+                        <Send className="w-5 h-5" />
+                      </button>
                     </div>
                   </div>
                   
