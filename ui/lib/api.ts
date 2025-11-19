@@ -88,26 +88,6 @@ export interface HealthResponse {
   timestamp: string;
 }
 
-export interface ContentHistoryItem {
-  id: string;
-  user_id: string;
-  content_type: string;
-  title: string;
-  created_at: string;
-  preview: string;
-}
-
-export interface ContentHistoryDetail {
-  id: string;
-  user_id: string;
-  content_type: string;
-  title: string;
-  content: string;
-  metadata: any;
-  created_at: string;
-  updated_at: string;
-}
-
 // Products API Types
 export interface Product {
   id?: string;
@@ -195,40 +175,12 @@ export interface ProductCreateRequest {
   };
 }
 
-export interface ContentHistoryCreateRequest {
-  user_id?: string;
-  content_type: string;
-  title: string;
-  content: string;
-  metadata?: any;
-}
-
-// Chat Histories (MongoDB) Types
-export interface ChatHistoryMessage {
-  role: string;
-  content: any;
-  metadata?: Record<string, any> | null;
-}
-
-export interface CreateConversationPayload {
-  conversation_id: string;
-  user_id: string;
-  first_message?: ChatHistoryMessage | null;
-  metadata?: Record<string, any> | null;
-}
-
-export interface AppendMessagePayload {
-  conversation_id: string;
-  message: ChatHistoryMessage;
-}
-
 export interface ConversationItem {
   conversation_id: string;
   user_id: string;
   created_at?: string;
   updated_at?: string;
   preview?: string;
-  messages?: ChatHistoryMessage[];
   metadata?: Record<string, any> | null;
 }
 
@@ -325,33 +277,6 @@ export const api = {
     return response.data;
   },
 
-  // Get saved content history
-  getContentHistory: async (page: number = 1, limit: number = 10) => {
-    const response = await apiClient.get(`/api/v1/content/history?limit=${limit}`);
-    return response.data;
-  },
-
-  // Content History API functions
-  createContentHistory: async (data: ContentHistoryCreateRequest): Promise<any> => {
-    const response = await apiClient.post('/api/v1/content/history', data);
-    return response.data;
-  },
-
-  getContentHistoryList: async (userId: string = 'default_user', limit: number = 10): Promise<ContentHistoryItem[]> => {
-    const response = await apiClient.get(`/api/v1/content/history?user_id=${userId}&limit=${limit}`);
-    return response.data;
-  },
-
-  getContentHistoryDetail: async (historyId: string): Promise<ContentHistoryDetail> => {
-    const response = await apiClient.get(`/api/v1/content/history/${historyId}`);
-    return response.data;
-  },
-
-  deleteContentHistory: async (historyId: string): Promise<any> => {
-    const response = await apiClient.delete(`/api/v1/content-history/${historyId}`);
-    return response.data;
-  },
-
   // Products API
   getProductsByCategory: async (category: string, limit: number = 20): Promise<ProductListResponse> => {
     const response = await apiClient.get(`/api/v1/products/category/${category}?limit=${limit}`);
@@ -387,34 +312,6 @@ export const api = {
 
   createPostType: async (payload: PostTypeCreateRequest): Promise<any> => {
     const response = await apiClient.post('/api/v1/post-types', payload);
-    return response.data;
-  },
-
-  // =========================
-  // MongoDB Chat Histories API
-  // =========================
-  historiesCreate: async (payload: CreateConversationPayload): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/create', payload);
-    return response.data;
-  },
-
-  historiesAppend: async (payload: AppendMessagePayload): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/append', payload);
-    return response.data;
-  },
-
-  historiesGet: async (conversationId: string): Promise<{ status: number; message: string; data: ConversationItem | null; }> => {
-    const response = await apiClient.post('/api/v1/histories/get', { conversation_id: conversationId });
-    return response.data;
-  },
-
-  historiesList: async (userId: string, page: number = 1, limit: number = 20): Promise<{ status: number; message: string; data: ConversationListData; }> => {
-    const response = await apiClient.post('/api/v1/histories/list', { user_id: userId, page, limit });
-    return response.data;
-  },
-
-  historiesDelete: async (conversationId: string): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/delete', { conversation_id: conversationId });
     return response.data;
   },
 };

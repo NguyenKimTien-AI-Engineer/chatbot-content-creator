@@ -7,7 +7,6 @@ from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import os
-import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +19,6 @@ class MongoDBManager:
         self.client: Optional[AsyncIOMotorClient] = None
         self.database: Optional[AsyncIOMotorDatabase] = None
         self.templates_collection: Optional[AsyncIOMotorCollection] = None
-        self.content_history_collection: Optional[AsyncIOMotorCollection] = None
-        self.histories_collection: Optional[AsyncIOMotorCollection] = None
         self.products_collection: Optional[AsyncIOMotorCollection] = None
         self.post_types_collection: Optional[AsyncIOMotorCollection] = None
         
@@ -76,22 +73,12 @@ class MongoDBManager:
             
             self.database = self.client[self.database_name]
             self.templates_collection = self.database["templates"]
-            self.content_history_collection = self.database["content_history"]
-            self.histories_collection = self.database["histories"]
             self.products_collection = self.database["products"]
             self.post_types_collection = self.database["post_types"]
             
             # Tạo index cho timestamp để query nhanh hơn
             try:
                 await self.templates_collection.create_index([("timestamp", -1)])
-                await self.content_history_collection.create_index([("created_at", -1)])
-                await self.content_history_collection.create_index([("user_id", 1)])
-                # Indexes for chat histories
-                if self.histories_collection is not None:
-                    await self.histories_collection.create_index([("conversation_id", 1)], unique=True)
-                    await self.histories_collection.create_index([("user_id", 1)])
-                    await self.histories_collection.create_index([("created_at", -1)])
-                    await self.histories_collection.create_index([("updated_at", -1)])
                 await self.products_collection.create_index([("sku", 1)])
                 await self.products_collection.create_index([("name", "text")])
                 await self.products_collection.create_index([("data.category", 1)])
@@ -108,206 +95,6 @@ class MongoDBManager:
             print(f"[MONGODB] Connection failure: {e}")
             return False
 
-    async def create_conversation(
-        self,
-        conversation_id: str,
-        user_id: str,
-        first_message: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        updated_at: Optional[Any] = None,
-        extra_document: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """Khởi tạo conversation trong 'histories' với hỗ trợ messages và updated_at.
-
-        Upsert theo 'conversation_id' và chuẩn hóa timestamp.
-        """
-        if self.histories_collection is None:
-            return False
-
-        def _parse_iso(ts: str) -> Optional[datetime]:
-            try:
-                if ts.endswith("Z"):
-                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                return datetime.fromisoformat(ts)
-            except Exception:
-                return None
-
-        def _normalize_timestamp(ts: Any, default: datetime) -> datetime:
-            if ts is None:
-                return default
-            if isinstance(ts, datetime):
-                return ts
-            if isinstance(ts, str):
-                parsed = _parse_iso(ts)
-                return parsed or default
-            if isinstance(ts, dict):
-                iso = ts.get("$date")
-                if isinstance(iso, str):
-                    parsed = _parse_iso(iso)
-                    return parsed or default
-            return default
-
-        attempts = 0
-        while attempts < 3:
-            try:
-                now = datetime.utcnow()
-                doc_updated_at = _normalize_timestamp(updated_at, now)
-                extra = extra_document or {}
-                doc_created_at = now
-                if extra.get("created_at") is not None:
-                    doc_created_at = _normalize_timestamp(extra.get("created_at"), now)
-                    # avoid duplicate after normalization
-                    extra.pop("created_at", None)
-
-                normalized_messages: List[Dict[str, Any]] = []
-                source_messages = messages or []
-
-                if first_message:
-                    source_messages = [first_message] + source_messages
-
-                for msg in source_messages:
-                    m = msg.copy()
-                    m["timestamp"] = _normalize_timestamp(m.get("timestamp"), now)
-                    normalized_messages.append(m)
-
-                doc: Dict[str, Any] = {
-                    "conversation_id": conversation_id,
-                    "user_id": user_id,
-                    "created_at": doc_created_at,
-                    "updated_at": doc_updated_at,
-                    "messages": normalized_messages,
-                    "metadata": metadata or {},
-                }
-
-                # merge extra fields (remove None)
-                for k, v in (extra.items()):
-                    if v is not None:
-                        doc[k] = v
-                if "status" not in doc:
-                    doc["status"] = "active"
-
-                await self.histories_collection.update_one(
-                    {"conversation_id": conversation_id},
-                    {"$setOnInsert": doc, "$set": {"updated_at": doc_updated_at}},
-                    upsert=True,
-                )
-                return True
-            except (ConnectionFailure, ServerSelectionTimeoutError):
-                attempts += 1
-                await asyncio.sleep(0.5 * attempts)
-                await self.connect()
-            except Exception:
-                return False
-        return False
-
-    async def append_message(self, conversation_id: str, message: Dict[str, Any]) -> bool:
-        """Thêm message vào conversation, chuẩn hóa timestamp. Có retry."""
-        if self.histories_collection is None:
-            return False
-
-        def _parse_iso(ts: str) -> Optional[datetime]:
-            try:
-                if ts.endswith("Z"):
-                    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                return datetime.fromisoformat(ts)
-            except Exception:
-                return None
-
-        def _normalize_timestamp(ts: Any, default: datetime) -> datetime:
-            if ts is None:
-                return default
-            if isinstance(ts, datetime):
-                return ts
-            if isinstance(ts, str):
-                parsed = _parse_iso(ts)
-                return parsed or default
-            if isinstance(ts, dict):
-                iso = ts.get("$date")
-                if isinstance(iso, str):
-                    parsed = _parse_iso(iso)
-                    return parsed or default
-            return default
-
-        attempts = 0
-        while attempts < 3:
-            try:
-                now = datetime.utcnow()
-                msg = message.copy()
-                msg["timestamp"] = _normalize_timestamp(msg.get("timestamp"), now)
-
-                result = await self.histories_collection.update_one(
-                    {"conversation_id": conversation_id},
-                    {"$push": {"messages": msg}, "$set": {"updated_at": now}},
-                    upsert=True,
-                )
-                return result.acknowledged
-            except (ConnectionFailure, ServerSelectionTimeoutError):
-                attempts += 1
-                await asyncio.sleep(0.5 * attempts)
-                await self.connect()
-            except Exception:
-                return False
-        return False
-
-    async def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
-        """Lấy chi tiết conversation theo conversation_id."""
-        if self.histories_collection is None:
-            return None
-        try:
-            doc = await self.histories_collection.find_one({"conversation_id": conversation_id})
-            if not doc:
-                return None
-            doc.pop("_id", None)
-            return doc
-        except Exception:
-            return None
-
-    async def list_conversations(self, user_id: str, limit: int = 20, skip: int = 0) -> List[Dict[str, Any]]:
-        """Danh sách conversation theo user_id với phân trang."""
-        if self.histories_collection is None:
-            return []
-        try:
-            cursor = self.histories_collection.find({"user_id": user_id}).sort("updated_at", -1).skip(skip).limit(limit)
-            out: List[Dict[str, Any]] = []
-            async for doc in cursor:
-                doc.pop("_id", None)
-                # Ưu tiên preview từ answer nếu có, fallback về tin nhắn cuối
-                answer = doc.get("answer")
-                if isinstance(answer, str) and answer:
-                    doc["preview"] = answer[:160]
-                else:
-                    last = doc.get("messages", [])[-1] if doc.get("messages") else None
-                    if last and isinstance(last.get("content"), str):
-                        doc["preview"] = last["content"][:160]
-                out.append(doc)
-            return out
-        except Exception:
-            return []
-
-    async def count_conversations_by_user(self, user_id: str) -> int:
-        """Đếm số conversation theo user_id."""
-        if self.histories_collection is None:
-            return 0
-        try:
-            return await self.histories_collection.count_documents({"user_id": user_id})
-        except Exception:
-            return 0
-
-    async def delete_conversation(self, conversation_id: str) -> bool:
-        """Xóa conversation."""
-        if self.histories_collection is None:
-            return False
-        try:
-            result = await self.histories_collection.delete_one({"conversation_id": conversation_id})
-            return result.deleted_count > 0
-        except Exception:
-            return False
-        except Exception as e:
-            print(f"[MONGODB] Unexpected error during connection: {e}")
-            print(f"[MONGODB] Connection string format may be invalid: {self.connection_string[:50]}...")
-            return False
-    
     async def cleanup_old_templates(self, keep_count: int = 10) -> int:
         """
         Xóa các template cũ, chỉ giữ lại số lượng template mới nhất.
@@ -488,125 +275,6 @@ class MongoDBManager:
                 
         except Exception as e:
             print(f"Lỗi khi xóa templates cũ: {e}")
-
-    async def save_content_history(self, content_data: Dict[str, Any]) -> Optional[str]:
-        """
-        Lưu lịch sử content vào database.
-        
-        Args:
-            content_data: Dữ liệu content history
-            
-        Returns:
-            str: ID của content history đã lưu
-        """
-        if self.content_history_collection is None:
-            return None
-            
-        try:
-            # Thêm timestamp
-            now = datetime.utcnow()
-            content_data.update({
-                "created_at": now,
-                "updated_at": now
-            })
-            
-            result = await self.content_history_collection.insert_one(content_data)
-            return str(result.inserted_id)
-            
-        except Exception as e:
-            print(f"Lỗi khi lưu content history: {e}")
-            return None
-    
-    async def get_content_history_list(self, user_id: str = "default_user", limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Lấy danh sách lịch sử content của user.
-        
-        Args:
-            user_id: ID của user
-            limit: Số lượng record tối đa
-            
-        Returns:
-            List: Danh sách content history
-        """
-        if self.content_history_collection is None:
-            return []
-            
-        try:
-            cursor = self.content_history_collection.find(
-                {"user_id": user_id}
-            ).sort("created_at", -1).limit(limit)
-            
-            histories = []
-            async for doc in cursor:
-                doc["id"] = str(doc["_id"])
-                del doc["_id"]
-                # Tạo preview từ post_content thay vì toàn bộ content
-                content_str = doc.get("content", "")
-                try:
-                    content_obj = json.loads(content_str)
-                    post_content = content_obj.get("post_content", "")
-                    # Lấy 150 ký tự đầu của post_content
-                    doc["preview"] = post_content[:150] + "..." if len(post_content) > 150 else post_content
-                except (json.JSONDecodeError, TypeError) as e: # ignore: e
-                    # Fallback nếu không parse được JSON
-                    doc["preview"] = content_str[:100] + "..." if len(content_str) > 100 else content_str
-                histories.append(doc)
-                
-            return histories
-            
-        except Exception as e:
-            print(f"Lỗi khi lấy danh sách content history: {e}")
-            return []
-    
-    async def get_content_history_by_id(self, history_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Lấy chi tiết content history theo ID.
-        
-        Args:
-            history_id: ID của content history
-            
-        Returns:
-            Dict: Chi tiết content history
-        """
-        if self.content_history_collection is None:
-            return None
-            
-        try:
-            from bson import ObjectId
-            doc = await self.content_history_collection.find_one({"_id": ObjectId(history_id)})
-            
-            if doc:
-                doc["id"] = str(doc["_id"])
-                del doc["_id"]
-                return doc
-                
-            return None
-            
-        except Exception as e:
-            print(f"Lỗi khi lấy content history: {e}")
-            return None
-    
-    async def delete_content_history(self, history_id: str) -> bool:
-        """
-        Xóa content history theo ID.
-        
-        Args:
-            history_id: ID của content history
-            
-        Returns:
-            bool: True nếu xóa thành công
-        """
-        if self.content_history_collection is None:
-            return False
-            
-        try:
-            from bson import ObjectId
-            result = await self.content_history_collection.delete_one({"_id": ObjectId(history_id)})
-            return result.deleted_count > 0
-            
-        except Exception as e:
-            print(f"Lỗi khi xóa content history: {e}")
-            return False
 
     async def save_products(self, products_data: List[Dict[str, Any]]) -> int:
         """
@@ -1102,64 +770,6 @@ async def load_latest_template() -> Optional[Dict[str, Any]]:
     """
     manager = await get_mongodb_manager()
     return await manager.get_latest_template()
-
-
-# Content History Methods - thêm vào class MongoDBManager
-async def save_content_history(content_data: Dict[str, Any]) -> Optional[str]:
-    """
-    Utility function để lưu content history.
-    
-    Args:
-        content_data: Dữ liệu content history
-        
-    Returns:
-        str: ID của content history đã lưu
-    """
-    manager = await get_mongodb_manager()
-    return await manager.save_content_history(content_data)
-
-
-async def get_content_history_list(user_id: str = "default_user", limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    Utility function để lấy danh sách content history.
-    
-    Args:
-        user_id: ID của user
-        limit: Số lượng record tối đa
-        
-    Returns:
-        List: Danh sách content history
-    """
-    manager = await get_mongodb_manager()
-    return await manager.get_content_history_list(user_id, limit)
-
-
-async def get_content_history_by_id(history_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Utility function để lấy chi tiết content history.
-    
-    Args:
-        history_id: ID của content history
-        
-    Returns:
-        Dict: Chi tiết content history
-    """
-    manager = await get_mongodb_manager()
-    return await manager.get_content_history_by_id(history_id)
-
-
-async def delete_content_history(history_id: str) -> bool:
-    """
-    Utility function để xóa content history.
-    
-    Args:
-        history_id: ID của content history
-        
-    Returns:
-        bool: True nếu xóa thành công
-    """
-    manager = await get_mongodb_manager()
-    return await manager.delete_content_history(history_id)
 
 
 # Products utility functions
