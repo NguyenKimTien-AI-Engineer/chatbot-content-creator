@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, Smile, Paperclip } from "lucide-react";
+import { Send, Bot, Smile, Plus } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import Image from "next/image";
 import { Header } from "@/components/layout/header";
@@ -576,6 +576,11 @@ export default function ModernChatPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string>("");
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imageAnalysisText, setImageAnalysisText] = useState<string>("");
+  const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
+  const [showEmojiMenu, setShowEmojiMenu] = useState<boolean>(false);
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -608,13 +613,19 @@ export default function ModernChatPage() {
   }, [uploadError]);
 
   const handleSendMessage = async () => {
-    if (input.trim() === "") return;
+    if (input.trim() === "" && imageFiles.length === 0) return;
 
     const now = Date.now();
+    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+    const textToSend = input.trim() !== "" ? input.trim() : (imageFiles.length >= 2 ? defaultTwo : defaultOne);
+    const contentToSend: any = imagePreviews.length > 0
+      ? { text: textToSend, images: imagePreviews.slice(0, 2) }
+      : textToSend;
     const userMessage: ChatMessage = {
       id: now.toString(),
       role: "user",
-      content: input,
+      content: contentToSend,
       timestamp: now,
     };
 
@@ -623,24 +634,50 @@ export default function ModernChatPage() {
     setIsTyping(true);
     setPendingChart(false);
 
-    const queryLower = String(userMessage.content).toLowerCase();
+    const queryLower = String(
+      typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || ""
+    ).toLowerCase();
     let chatbotType: ChatbotType = "reference";
     const chartKeywords = [
-      "phân tích", "so sánh", "phân loại", "thống kê", "biểu đồ", "vẽ", "chart", "draw",
+      "biểu đồ", "đồ thị", "chart", "plot", "graph", "vẽ", "draw", "visualize",
     ];
+    // Chỉ bật chế độ chart khi có từ khóa đặc thù của biểu đồ
     if (chartKeywords.some((kw) => queryLower.includes(kw))) {
       chatbotType = "chart";
+    }
+    // Nếu là tin nhắn mặc định khi chỉ có ảnh, không kích hoạt chart
+    if ((queryLower === defaultOne.toLowerCase() || queryLower === defaultTwo.toLowerCase()) && imageFiles.length > 0) {
+      chatbotType = "reference";
+    }
+
+    let imageTextToSend = imageAnalysisText;
+    if (!imageTextToSend && imageFiles.length > 0) {
+      const texts: string[] = [];
+      for (const f of imageFiles.slice(0, 2)) {
+        const t = await analyzeImageFile(f);
+        if (t) texts.push(t);
+      }
+      imageTextToSend = texts.join("\n\n---\n");
+      setImageAnalysisText(imageTextToSend);
     }
 
     const payload = {
       user_id: userId,
-      query: userMessage.content,
+      query: typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || "",
       collections: [DEFAULT_COLLECTION],
       session_id: sessionId,
       history_id: "",
       system_instruction_user: systemInstructionUser,
       include_products: true,
+      image_text: imageTextToSend || "",
     };
+
+    // Xóa preview ảnh khỏi khung nhập ngay sau khi chuẩn bị payload
+    setImagePreviews([]);
+    setImageFiles([]);
+    setShowPlusMenu(false);
+    setShowEmojiMenu(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
 
     const assistantId = (Date.now() + 1).toString();
     assistantStreamingIdRef.current = assistantId;
@@ -708,22 +745,14 @@ export default function ModernChatPage() {
 
   const handleAttachClick = () => {
     fileInputRef.current?.click();
+    setShowPlusMenu(false);
   };
 
-  const handleFileSelected = async (e: any) => {
-    const file = e?.target?.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
-    setUploadError(null);
+  const analyzeImageFile = async (imageFile: File): Promise<string> => {
     try {
       const form = new FormData();
-      form.append("user_id", userId || "default");
-      form.append("collection_name", DEFAULT_COLLECTION);
-      form.append("file", file);
-      form.append("language", "vie+eng");
-      form.append("note", "");
-
-      const paths = getApiPaths("/api/v1/upload-to-collection");
+      form.append("file", imageFile);
+      const paths = getApiPaths("/api/v1/analyze-image");
       let res: Response | null = null;
       try {
         res = await fetch(paths.relative, { method: "POST", body: form });
@@ -734,30 +763,135 @@ export default function ModernChatPage() {
           throw err;
         }
       }
-      if (!res || !res.ok) {
-        const msg = await (res ? res.text() : Promise.resolve("Network error"));
-        setUploadError(msg || "Upload failed");
-      } else {
-        let data: any = null;
-        try {
-          data = await res.json();
-        } catch {
-          data = null;
-        }
-        const fileName = file?.name || "tập tin";
-        const points = data?.total_saved_points ?? data?.count ?? null;
-        const msgParts: string[] = [];
-        msgParts.push(`Đã tải và xử lý xong: ${fileName}`);
-        if (typeof points === "number") msgParts.push(`(${points} đoạn)`);
-        setUploadMessage(msgParts.join(" "));
-        setUploadSuccess(true);
+      if (res && res.ok) {
+        const data = await res.json();
+        return String(data?.data?.image_text || "");
       }
-    } catch (err: any) {
-      setUploadError(String(err?.message || err));
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      return "";
+    } catch {
+      return "";
     }
+  };
+
+  const handleFileSelected = async (e: any) => {
+    const files: File[] = Array.from(e?.target?.files || []);
+    if (files.length === 0) return;
+    setUploadError(null);
+
+    const imageCandidates = files.filter((f) => f.type?.startsWith("image/"));
+    const nonImage = files.find((f) => !f.type?.startsWith("image/"));
+
+    if (imageCandidates.length > 0) {
+      try {
+        let added = 0;
+        for (const file of imageCandidates) {
+          if (imageFiles.length + added >= 2) {
+            setUploadError("Chỉ cho phép tối đa 2 hình ảnh cho mỗi lần gửi.");
+            break;
+          }
+          const url = URL.createObjectURL(file);
+          setImagePreviews((prev) => [...prev, url]);
+          setImageFiles((prev) => [...prev, file]);
+          const analysis = await analyzeImageFile(file);
+          if (analysis) {
+            setImageAnalysisText((prev) => prev ? `${prev}\n\n---\n${analysis}` : analysis);
+          }
+          added += 1;
+        }
+      } catch (err: any) {
+        setUploadError(String(err?.message || err));
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    if (nonImage) {
+      // File không phải ảnh: quy trình upload bình thường
+      setIsUploading(true);
+      try {
+        const form = new FormData();
+        form.append("user_id", userId || "default");
+        form.append("collection_name", DEFAULT_COLLECTION);
+        form.append("file", nonImage);
+        form.append("language", "vie+eng");
+        form.append("note", "");
+
+        const paths = getApiPaths("/api/v1/upload-to-collection");
+        let res: Response | null = null;
+        try {
+          res = await fetch(paths.relative, { method: "POST", body: form });
+        } catch (err) {
+          if (paths.absolute) {
+            res = await fetch(paths.absolute, { method: "POST", body: form });
+          } else {
+            throw err;
+          }
+        }
+        if (!res || !res.ok) {
+          const msg = await (res ? res.text() : Promise.resolve("Network error"));
+          setUploadError(msg || "Upload failed");
+        } else {
+          let data: any = null;
+          try {
+            data = await res.json();
+          } catch {
+            data = null;
+          }
+          const fileName = nonImage?.name || "tập tin";
+          const points = data?.total_saved_points ?? data?.count ?? null;
+          const msgParts: string[] = [];
+          msgParts.push(`Đã tải và xử lý xong: ${fileName}`);
+          if (typeof points === "number") msgParts.push(`(${points} đoạn)`);
+          setUploadMessage(msgParts.join(" "));
+          setUploadSuccess(true);
+        }
+      } catch (err: any) {
+        setUploadError(String(err?.message || err));
+      } finally {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handlePaste = async (e: any) => {
+    try {
+      const items = e.clipboardData?.items || [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it && it.type && it.type.startsWith("image/")) {
+          if (imageFiles.length >= 2) {
+            setUploadError("Chỉ cho phép tối đa 2 hình ảnh cho mỗi lần gửi.");
+            break;
+          }
+          const blob = it.getAsFile();
+          if (!blob) continue;
+          const file = new File([blob], `pasted-${Date.now()}.png`, { type: blob.type || "image/png" });
+          const url = URL.createObjectURL(blob);
+          setImagePreviews((prev) => [...prev, url]);
+          setImageFiles((prev) => [...prev, file]);
+          const analysis = await analyzeImageFile(file);
+          if (analysis) {
+            setImageAnalysisText((prev) => prev ? `${prev}\n\n---\n${analysis}` : analysis);
+          }
+          if (imageFiles.length + 1 >= 2) break;
+        }
+      }
+    } catch (err) {
+      console.warn("Paste image failed", err);
+    }
+  };
+
+  const removeImageAt = (index: number) => {
+    setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+    setImageFiles((prev) => prev.filter((_, i) => i !== index));
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const insertEmoji = (emoji: string) => {
+    setInput((prev) => (prev || "") + emoji);
+    inputRef.current?.focus();
   };
 
   const formatTime = (date: Date) => {
@@ -782,42 +916,99 @@ export default function ModernChatPage() {
             <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
               <div className="max-w-2xl w-full mx-auto flex flex-col items-center">
                 <h1 className="text-5xl font-semibold tracking-tight text-gray-900 mb-6 select-none">MEKONGAI</h1>
-                <div className="relative flex items-center gap-2 w-full">
-                  <div className="relative flex-1">
+                <div className="flex items-center gap-2 w-full">
+                  <div className="flex-1">
                     <input
                       ref={fileInputRef}
                       type="file"
+                      multiple
                       className="hidden"
                       onChange={handleFileSelected}
                     />
-                    <input
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                      placeholder="Bạn muốn biết điều gì?"
-                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                    />
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    {imagePreviews.length > 0 && (
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {imagePreviews.map((preview, idx) => (
+                          <div key={idx} className="inline-block relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={preview}
+                              alt="attachment-preview"
+                              className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
+                            />
+                            <button
+                              onClick={() => removeImageAt(idx)}
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
+                              title="Xóa ảnh"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <input
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onPaste={handlePaste}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                        placeholder="Bạn muốn biết điều gì?"
+                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowPlusMenu((s) => !s)}
+                            disabled={isUploading}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title={isUploading ? "Đang tải..." : "Thêm"}
+                          >
+                            <Plus className="w-5 h-5 text-gray-400" />
+                          </button>
+                          {showPlusMenu && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                              <button
+                                onClick={handleAttachClick}
+                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                              >
+                                Add photos & files
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowEmojiMenu((s) => !s)}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title="Emoji"
+                          >
+                            <Smile className="w-5 h-5 text-gray-400" />
+                          </button>
+                          {showEmojiMenu && (
+                            <div className="absolute z-10 mt-2 w-36 rounded-xl border border-gray-200 bg-white shadow-md p-2 flex flex-wrap gap-1">
+                              {['😀','😊','👍','❤️','🔥','🎉','🙏','🤔','😎','🥳'].map((e) => (
+                                <button
+                                  key={e}
+                                  onClick={() => { insertEmoji(e); setShowEmojiMenu(false); }}
+                                  className="px-2 py-1 rounded hover:bg-gray-50 text-lg"
+                                  aria-label={`emoji-${e}`}
+                                >
+                                  {e}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       <button
-                        onClick={handleAttachClick}
-                        disabled={isUploading}
-                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                        onClick={handleSendMessage}
+                        disabled={!input.trim() && imageFiles.length === 0}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                       >
-                        <Paperclip className="w-5 h-5 text-gray-400" />
-                      </button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                        <Smile className="w-5 h-5 text-gray-400" />
+                        <Send className="w-5 h-5" />
                       </button>
                     </div>
-                    <button
-                      onClick={handleSendMessage}
-                      disabled={!input.trim()}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-5 h-5" />
-                    </button>
                   </div>
                   
                 </div>
@@ -898,7 +1089,26 @@ export default function ModernChatPage() {
                         {message.role === "assistant" ? (
                           <div className="text-sm leading-relaxed prose max-w-none" dangerouslySetInnerHTML={{ __html: formatAssistantHtml(String(message.content || "")) }} />
                         ) : (
-                          <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                          typeof message.content === "string" ? (
+                            <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {Array.isArray(message.content?.images) && message.content.images.length > 0 && (
+                                <div className="flex flex-wrap gap-2">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  {message.content.images.map((src: string, idx: number) => (
+                                    <img
+                                      key={idx}
+                                      src={src}
+                                      alt={`attachment-${idx}`}
+                                      className="w-36 h-36 rounded-xl object-cover border border-gray-200"
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                              <p className="text-sm leading-relaxed">{String(message.content?.text || "")}</p>
+                            </div>
+                          )
                         )}
                       </div>
                     )}
@@ -965,42 +1175,99 @@ export default function ModernChatPage() {
                 {uploadError && (
                   <p className="text-xs text-red-600 mt-2" aria-live="polite">{uploadError}</p>
                 )}
-                <div className="relative flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      className="hidden"
-                      onChange={handleFileSelected}
-                    />
-                    <input
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                      placeholder="Nhập tin nhắn của bạn..."
-                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                    />
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileSelected}
+                  />
+                  {imagePreviews.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {imagePreviews.map((preview, idx) => (
+                        <div key={idx} className="inline-block relative">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={preview}
+                            alt="attachment-preview"
+                            className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
+                          />
+                          <button
+                            onClick={() => removeImageAt(idx)}
+                            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
+                            title="Xóa ảnh"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                    <div className="relative">
+                      <input
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onPaste={handlePaste}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                        placeholder="Nhập tin nhắn của bạn..."
+                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <div className="relative">
                       <button
-                        onClick={handleAttachClick}
+                        onClick={() => setShowPlusMenu((s) => !s)}
                         disabled={isUploading}
                         className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                        title={isUploading ? "Đang tải..." : "Thêm"}
                       >
-                        <Paperclip className="w-5 h-5 text-gray-400" />
+                        <Plus className="w-5 h-5 text-gray-400" />
                       </button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+                      {showPlusMenu && (
+                        <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                          <button
+                            onClick={handleAttachClick}
+                            className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                          >
+                            Add photos & files
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowEmojiMenu((s) => !s)}
+                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                        title="Emoji"
+                      >
                         <Smile className="w-5 h-5 text-gray-400" />
                       </button>
+                      {showEmojiMenu && (
+                        <div className="absolute z-10 mt-2 w-36 rounded-xl border border-gray-200 bg-white shadow-md p-2 flex flex-wrap gap-1">
+                          {['😀','😊','👍','❤️','🔥','🎉','🙏','🤔','😎','🥳'].map((e) => (
+                            <button
+                              key={e}
+                              onClick={() => { insertEmoji(e); setShowEmojiMenu(false); }}
+                              className="px-2 py-1 rounded hover:bg-gray-50 text-lg"
+                              aria-label={`emoji-${e}`}
+                            >
+                              {e}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <button
-                      onClick={handleSendMessage}
-                      disabled={!input.trim()}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-5 h-5" />
-                    </button>
+                      </div>
+                <button
+                  onClick={handleSendMessage}
+                  disabled={!input.trim() && imageFiles.length === 0}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+                    </div>
                   </div>
                   
                 </div>

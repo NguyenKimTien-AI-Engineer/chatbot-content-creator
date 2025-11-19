@@ -224,7 +224,7 @@ Hình ảnh: {', '.join(image_urls) if image_urls else 'Không có hình ảnh'}
 
 
 ############################################################################################################
-def chatbot_custom_prompt_stream(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True):
+def chatbot_custom_prompt_stream(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True, image_text: str = ""):
     # query_ = asyncio.run(translate.translate_to_english(query))
     start_time = time.time()
 
@@ -307,6 +307,7 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         "checklist": str(checklist.checklist),
         "text": str(product_context),
         "system_instruction_user": str(system_instruction_user),
+        "image_text": str(image_text),
     }
 
     # Debug logging - set DEBUG_PROMPT=True to see full prompt
@@ -445,12 +446,13 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         "time_now": str(current_time),
         "text": str(product_context),
         "system_instruction_user": str(system_instruction_user),
+        "image_text": str(image_text),
         "message_payload": message_payload,
     })
     # return generate_chat_responses(message_payload)
 
 
-def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True):
+def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, system_instruction_user: str = "", include_products: bool = True, image_text: str = ""):
     """
     Phiên bản không streaming của chatbot custom prompt với hỗ trợ dữ liệu sản phẩm.
     """
@@ -531,6 +533,7 @@ def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, s
         "time_now": str(current_time),
         "text": str(product_context),
         "system_instruction_user": str(system_instruction_user),
+        "image_text": str(image_text),
     })
 
     pages = reference.extract_reference_document_numbers(answer)

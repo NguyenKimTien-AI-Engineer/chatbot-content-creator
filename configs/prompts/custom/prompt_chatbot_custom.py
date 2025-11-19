@@ -17,6 +17,11 @@ Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viế
 
 ---
 
+<|Thông tin hình ảnh sản phẩm được người dùng tải lên "Nếu có"|>:
+{image_text}
+
+---
+
 <|Template bài viết mẫu|>:
 {template}
 
