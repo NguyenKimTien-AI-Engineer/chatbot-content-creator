@@ -62,6 +62,7 @@ class ChatbotCustomPromptRequest(BaseModel):
     history_id: Union[str, int, List[Any], Dict[str, Any]] = ""
     system_instruction_user: Union[str, int, List[Any], Dict[str, Any]] = ""
     include_products: bool = True
+    image_text: Union[str, int, List[Any], Dict[str, Any]] = ""
 
 
 class ChartRequest(BaseModel):
@@ -408,6 +409,7 @@ async def chatbot_custom_prompt_endpoint(request: ChatbotCustomPromptRequest):
             request.history_id,
             request.system_instruction_user,
             request.include_products,
+            str(request.image_text or ""),
         )
 
         content = {"status": 200, "message": "success", "data": {"answer": answer, "reference": references}}
@@ -436,6 +438,7 @@ async def chatbot_custom_prompt_stream_endpoint(request: ChatbotCustomPromptRequ
             request.history_id,
             request.system_instruction_user,
             request.include_products,
+            str(request.image_text or ""),
         )
 
         return StreamingResponse(

@@ -37,14 +37,14 @@ class MongoDBManager:
             port = int(os.getenv("MONGODB_PORT", "27017"))
             username = os.getenv("MONGODB_USERNAME", "")
             password = os.getenv("MONGODB_PASSWORD", "")
-            database = os.getenv("MONGODB_DATABASE", "mekongai_social")
+            database = os.getenv("MONGODB_DATABASE", "")
             
             if username and password:
                 self.connection_string = f"mongodb://{username}:{password}@{host}:{port}/{database}?authSource=admin"
             else:
                 self.connection_string = f"mongodb://{host}:{port}/{database}"
         
-        self.database_name = os.getenv("MONGODB_DATABASE", "mekongai_social")
+        self.database_name = os.getenv("MONGODB_DATABASE", "")
         
     async def connect(self) -> bool:
         """

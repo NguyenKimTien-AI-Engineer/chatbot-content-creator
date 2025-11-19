@@ -60,11 +60,11 @@ const menuItems = [
   //   url: "#",
   //   icon: Users,
   // },
-  // {
-  //   title: "Cài đặt",
-  //   url: "#",
-  //   icon: Settings,
-  // },
+  {
+    title: "Cài đặt",
+    url: "#",
+    icon: Settings,
+  },
 ];
 
 export function AppSidebar() {
