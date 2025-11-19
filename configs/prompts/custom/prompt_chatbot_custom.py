@@ -17,7 +17,8 @@ Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viế
 
 ---
 
-<|Thông tin hình ảnh sản phẩm được người dùng tải lên "Nếu có"|>:
+<|Thông tin phân tích hình ảnh sản phẩm từ hình ảnh người dùng tải lên "Nếu có"|>:
+**Luôn luôn sử dụng thông tin hình ảnh đã được phân tích mới nhất bên dưới. Tuyệt đối không sử dụng lại thông tin từ hình ảnh sản phẩm cũ để trả lời cho hình ảnh tiếp theo.** 
 {image_text}
 
 ---

@@ -553,9 +553,11 @@ export default function ModernChatPage() {
     if (input.trim() === "" && imageFiles.length === 0) return;
 
     const now = Date.now();
-    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+    const defaultSingle = "Phân tích ảnh và cảm nhận hình ảnh này";
     const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
-    const textToSend = input.trim() !== "" ? input.trim() : (imageFiles.length >= 2 ? defaultTwo : defaultOne);
+    const imageCount = Math.min(imagePreviews.length, imageFiles.length);
+    const autoText = imageCount >= 2 ? defaultTwo : defaultSingle;
+    const textToSend = input.trim() !== "" ? input.trim() : autoText;
     const contentToSend: any = imagePreviews.length > 0
       ? { text: textToSend, images: imagePreviews.slice(0, 2) }
       : textToSend;
@@ -582,8 +584,9 @@ export default function ModernChatPage() {
     if (chartKeywords.some((kw) => queryLower.includes(kw))) {
       chatbotType = "chart";
     }
-    // Nếu là tin nhắn mặc định khi chỉ có ảnh, không kích hoạt chart
-    if ((queryLower === defaultOne.toLowerCase() || queryLower === defaultTwo.toLowerCase()) && imageFiles.length > 0) {
+    // Nếu là tin nhắn mặc định khi có ảnh, không kích hoạt chart
+    const defaultSet = [defaultSingle.toLowerCase(), defaultTwo.toLowerCase()];
+    if (imageFiles.length > 0 && defaultSet.includes(queryLower)) {
       chatbotType = "reference";
     }
 
