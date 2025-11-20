@@ -12,11 +12,35 @@ const apiClient = axios.create({
   },
 });
 
+function genAuthToken(length = 32): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function getOrCreateAuthTokenSafely(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    let token = localStorage.getItem('auth_token');
+    if (!token) {
+      token = genAuthToken();
+      localStorage.setItem('auth_token', token);
+    }
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    // Add auth token if available
-    const token = localStorage.getItem('auth_token');
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem('auth_token');
+    } catch {}
+    if (!token) token = getOrCreateAuthTokenSafely();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
