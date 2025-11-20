@@ -6,6 +6,8 @@ import { AppSidebar } from "@/components/layout/app-sidebar";
 import Image from "next/image";
 import { Header } from "@/components/layout/header";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
 
 type Role = "user" | "assistant" | "chart" | "reference";
 
@@ -24,6 +26,24 @@ function generateRandomHistoryId(length = 15) {
   let out = "";
   for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
+}
+
+function generateSecureToken(length = 32) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let token = "";
+  for (let i = 0; i < length; i++) {
+    token += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return token;
+}
+
+function getOrCreateAuthToken(): string {
+  let token = localStorage.getItem('auth_token');
+  if (!token) {
+    token = generateSecureToken();
+    localStorage.setItem('auth_token', token);
+  }
+  return token;
 }
 
 function fixLinksInHtml(rawHtml: string): string {
@@ -507,7 +527,7 @@ export default function ModernChatPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [refToggle, setRefToggle] = useState(false);
   const [sessionId, setSessionId] = useState("");
-  const [userId] = useState<string>("default");
+  const [userId, setUserId] = useState<string>("");
   const [pendingChart, setPendingChart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -518,13 +538,73 @@ export default function ModernChatPage() {
   const [imageAnalyses, setImageAnalyses] = useState<string[]>([]);
   const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  const [isSavingHistory, setIsSavingHistory] = useState<boolean>(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const savedHistoryIdsRef = useRef<Set<string>>(new Set());
+  const MAX_SAVED_IDS = 1000; // Giới hạn số lượng ID đã lưu để tránh memory leak
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const searchParams = useSearchParams();
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const lastReferenceRef = useRef<any>(null);
+  const lastChartRef = useRef<any>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const saveChatHistory = async (userQuery: string, assistantAnswer: string, references?: any[], chart?: any, messageId?: string) => {
+    try {
+      // Check if this message has already been saved
+      if (messageId && savedHistoryIdsRef.current.has(messageId)) {
+        console.log("History already saved for message:", messageId);
+        return;
+      }
+      
+      setIsSavingHistory(true);
+      setHistoryError(null);
+      
+      const historyData = {
+        user_id: userId,
+        session_id: sessionId,
+        query: userQuery,
+        answer: assistantAnswer,
+        reference: references || [],
+        chart: chart || null,
+      };
+      
+      const response = await api.saveHistory(historyData);
+      
+      if (!response.success) {
+        throw new Error(response.message || "Không thể lưu lịch sử");
+      }
+      
+      console.log("Lịch sử đã được lưu thành công:", response.data.history_id);
+      
+      // Mark this message as saved
+      if (messageId) {
+        savedHistoryIdsRef.current.add(messageId);
+        
+        // Cleanup old IDs if we exceed the limit
+        if (savedHistoryIdsRef.current.size > MAX_SAVED_IDS) {
+          const idsArray = Array.from(savedHistoryIdsRef.current);
+          const idsToKeep = idsArray.slice(-MAX_SAVED_IDS / 2); // Keep the most recent half
+          savedHistoryIdsRef.current.clear();
+          idsToKeep.forEach(id => savedHistoryIdsRef.current.add(id));
+        }
+      }
+      
+    } catch (error) {
+      console.error("Lỗi khi lưu lịch sử:", error);
+      setHistoryError(error instanceof Error ? error.message : "Lỗi không xác định");
+      
+      // Hiển thị thông báo lỗi trong 5 giây
+      setTimeout(() => setHistoryError(null), 5000);
+    } finally {
+      setIsSavingHistory(false);
+    }
   };
 
   useEffect(() => {
@@ -532,8 +612,60 @@ export default function ModernChatPage() {
   }, [messages]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     if (!sessionId) setSessionId(generateRandomHistoryId());
   }, [sessionId]);
+
+  useEffect(() => {
+    // Initialize user ID from auth token
+    const token = getOrCreateAuthToken();
+    setUserId(token);
+  }, []);
+
+  useEffect(() => {
+    const s = searchParams.get("session_id");
+    if (s) {
+      setSessionId(s);
+      setMessages([]);
+      loadConversation(s);
+    }
+  }, [searchParams]);
+
+  const loadConversation = async (sid: string) => {
+    try {
+      const limit = 100;
+      let page = 1;
+      const all: any[] = [];
+      while (true) {
+        const res = await api.getHistoryCached({ session_id: sid, page, limit });
+        const list = res?.data || [];
+        all.push(...list);
+        if (list.length < limit || page >= 20) break;
+        page += 1;
+      }
+      const sorted = all.sort((a, b) => {
+        const ta = new Date((a.timestamp as any) || (a.created_at as any) || Date.now()).getTime();
+        const tb = new Date((b.timestamp as any) || (b.created_at as any) || Date.now()).getTime();
+        return ta - tb;
+      });
+      const rebuilt: ChatMessage[] = [];
+      for (const h of sorted) {
+        const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
+        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: h.query, timestamp: t });
+        rebuilt.push({ id: `${h.history_id}-a`, role: "assistant", content: h.answer, timestamp: t });
+        if (h.reference && Array.isArray(h.reference) && h.reference.length > 0) {
+          rebuilt.push({ id: `${h.history_id}-r`, role: "reference", content: h.reference, timestamp: t });
+        }
+        if (h.chart) {
+          rebuilt.push({ id: `${h.history_id}-c`, role: "chart", content: h.chart, timestamp: t });
+        }
+      }
+      setMessages(rebuilt);
+    } catch {}
+  };
 
   useEffect(() => {
     if (uploadSuccess) {
@@ -657,12 +789,14 @@ export default function ModernChatPage() {
       (metadata) => {
         // Append reference or chart metadata entries
         if (metadata?.reference) {
+          lastReferenceRef.current = metadata.reference;
           setMessages((prev) => [
             ...prev,
             { id: `${Date.now()}-ref`, role: "reference", content: metadata.reference, timestamp: Date.now() },
           ]);
         }
         if (metadata?.chart) {
+          lastChartRef.current = metadata.chart;
           setMessages((prev) => [
             ...prev,
             { id: `${Date.now()}-chartmeta`, role: "chart", content: metadata.chart, timestamp: Date.now() },
@@ -682,6 +816,27 @@ export default function ModernChatPage() {
     }
 
     setIsTyping(false);
+
+    // Lưu lịch sử chat sau khi hoàn thành
+    if (fullAnswer.trim()) {
+      const userQuery = typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || "";
+      const messageId = `history-${userMessage.id}`; // Unique ID for this history entry
+      
+      // Kiểm tra xem lịch sử đã được lưu chưa để tránh trùng lặp
+      if (savedHistoryIdsRef.current.has(messageId)) {
+        console.log("History already saved for message:", messageId);
+        return;
+      }
+      
+      // Lấy references và charts từ messages hiện tại
+      const references = lastReferenceRef.current || undefined;
+      const chart = lastChartRef.current || undefined;
+      
+      // Lưu lịch sử với delay nhỏ để đảm bảo messages đã được cập nhật
+      setTimeout(() => {
+        saveChatHistory(userQuery, fullAnswer, references, chart, messageId);
+      }, 100);
+    }
   };
 
   const handleAttachClick = () => {
@@ -945,6 +1100,18 @@ export default function ModernChatPage() {
                 {uploadError && (
                   <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">{uploadError}</p>
                 )}
+                {historyError && (
+                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
+                {isSavingHistory && (
+                  <p className="text-xs text-blue-600 text-center mt-2" aria-live="polite">Đang lưu lịch sử...</p>
+                )}
+                {historyError && (
+                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
+                {isSavingHistory && (
+                  <p className="text-xs text-blue-600 text-center mt-2" aria-live="polite">Đang lưu lịch sử...</p>
+                )}
                 <p className="text-xs text-gray-400 text-center mt-3">
                   AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
                 </p>
@@ -1098,6 +1265,12 @@ export default function ModernChatPage() {
                 )}
                 {uploadError && (
                   <p className="text-xs text-red-600 mt-2" aria-live="polite">{uploadError}</p>
+                )}
+                {historyError && (
+                  <p className="text-xs text-red-600 mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
+                {isSavingHistory && (
+                  <p className="text-xs text-blue-600 mt-2" aria-live="polite">Đang lưu lịch sử...</p>
                 )}
                 <div className="flex items-center gap-2">
                   <div className="flex-1">

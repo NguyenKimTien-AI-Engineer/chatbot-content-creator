@@ -2,7 +2,7 @@
 import axios from 'axios';
 
 // ✅ Đơn giản, rõ ràng
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:1979';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -191,6 +191,75 @@ export interface ConversationListData {
   total: number;
 }
 
+// History API Types
+export interface HistoryItem {
+  history_id: string;
+  user_id: string;
+  session_id: string;
+  query: string;
+  answer: string;
+  feedback?: string;
+  feedback_status?: string;
+  reference?: any[];
+  chart?: any;
+  timestamp?: string;
+  created_at?: string;
+}
+
+export interface HistoryCreateRequest {
+  user_id: string;
+  session_id: string;
+  query: string;
+  answer: string;
+  feedback?: string;
+  feedback_status?: string;
+  reference?: any[];
+  chart?: any;
+}
+
+export interface HistoryListResponse {
+  success: boolean;
+  message: string;
+  data: HistoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface HistoryCreateResponse {
+  success: boolean;
+  message: string;
+  data: {
+    history_id: string;
+    inserted_id: string;
+  };
+}
+
+export interface HistoryDeleteResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface SessionInfo {
+  session_id: string;
+  user_id: string;
+  last_activity?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SessionsResponse {
+  success: boolean;
+  message: string;
+  data: SessionInfo[];
+  total: number;
+}
+
+export interface DeleteSessionResponse {
+  success: boolean;
+  message: string;
+}
+
 // API Functions
 export const api = {
   // Health check
@@ -314,6 +383,120 @@ export const api = {
     const response = await apiClient.post('/api/v1/post-types', payload);
     return response.data;
   },
+
+  // History API
+  saveHistory: async (data: HistoryCreateRequest): Promise<HistoryCreateResponse> => {
+    const response = await apiClient.post('/api/v1/history', data);
+    historyCache.clear();
+    sessionsCache.clear();
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('history_updated_at', String(Date.now()));
+      }
+    } catch {}
+    return response.data;
+  },
+
+  getHistory: async (params?: {
+    user_id?: string;
+    session_id?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<HistoryListResponse> => {
+    const response = await apiClient.get('/api/v1/history', { params });
+    return response.data;
+  },
+
+  deleteHistory: async (historyId: string): Promise<HistoryDeleteResponse> => {
+    const response = await apiClient.delete(`/api/v1/history/${historyId}`);
+    return response.data;
+  },
+
+  getSessions: async (params?: { limit?: number; skip?: number }): Promise<SessionsResponse> => {
+    const response = await apiClient.get('/api/v1/history/sessions', { params });
+    return response.data;
+  },
+
+  deleteSession: async (sessionId: string): Promise<DeleteSessionResponse> => {
+    try {
+      const response = await apiClient.delete(`/api/v1/history/sessions/${sessionId}`);
+      historyCache.clear();
+      sessionsCache.clear();
+      try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+      return response.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 405) {
+        try {
+          const resp2 = await apiClient.delete(`/api/v1/history/sessions/${sessionId}/`);
+          historyCache.clear();
+          sessionsCache.clear();
+          try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+          return resp2.data;
+        } catch {
+          const resp3 = await apiClient.post(`/api/v1/history/sessions/delete`, { session_id: sessionId });
+          historyCache.clear();
+          sessionsCache.clear();
+          try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+          return resp3.data;
+        }
+      }
+      throw err;
+    }
+  },
+
+  getHistoryCached: async (params?: {
+    user_id?: string;
+    session_id?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<HistoryListResponse> => {
+    const key = JSON.stringify({
+      user_id: params?.user_id || 'current',
+      session_id: params?.session_id || 'all',
+      page: params?.page || 1,
+      limit: params?.limit || 20,
+    });
+    const cached = historyCache.get(key);
+    const ttl = 5 * 60 * 1000;
+    if (cached && Date.now() - cached.ts < ttl) {
+      return {
+        success: true,
+        message: 'cached',
+        data: cached.data,
+        total: cached.data.length,
+        page: params?.page || 1,
+        limit: params?.limit || 20,
+      };
+    }
+    const response = await apiClient.get('/api/v1/history', { params });
+    const data = response.data as HistoryListResponse;
+    historyCache.set(key, { ts: Date.now(), data: data.data });
+    return data;
+  },
+
+  getSessionsCached: async (params?: { limit?: number; skip?: number }): Promise<SessionsResponse> => {
+    const key = JSON.stringify({ limit: params?.limit ?? 30, skip: params?.skip ?? 0 });
+    const cached = sessionsCache.get(key);
+    const ttl = 2 * 60 * 1000;
+    if (cached && Date.now() - cached.ts < ttl) {
+      return {
+        success: true,
+        message: 'cached',
+        data: cached.data,
+        total: cached.data.length,
+      } as SessionsResponse;
+    }
+    const response = await apiClient.get('/api/v1/history/sessions', { params });
+    const data = response.data as SessionsResponse;
+    sessionsCache.set(key, { ts: Date.now(), data: data.data });
+    return data;
+  },
 };
 
 export default apiClient;
+
+type HistoryCacheEntry = { ts: number; data: HistoryItem[] };
+const historyCache: Map<string, HistoryCacheEntry> = new Map();
+type SessionsCacheEntry = { ts: number; data: SessionInfo[] };
+const sessionsCache: Map<string, SessionsCacheEntry> = new Map();
