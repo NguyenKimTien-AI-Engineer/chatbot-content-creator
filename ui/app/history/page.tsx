@@ -5,6 +5,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { Header } from "@/components/layout/header";
 import { api, SessionInfo } from "@/lib/api";
+import { useContentStore } from "@/store/content-store";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,19 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const limit = 15;
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const {
+    historySessions,
+    setHistorySessions,
+    historyPreviews,
+    setHistoryPreviews,
+    mergeHistoryPreviews,
+    historyHasLoaded,
+    setHistoryHasLoaded,
+    historyHasMore,
+    setHistoryHasMore,
+    historySkip,
+    setHistorySkip,
+  } = useContentStore();
 
   const load = async (initial = false) => {
     try {
@@ -35,11 +49,16 @@ export default function HistoryPage() {
           return true;
         });
       });
-      setHasMore(data.length === limit);
+      const nextHasMore = data.length === limit;
+      setHasMore(nextHasMore);
+      setHistoryHasMore(nextHasMore);
       setPage((p) => (initial ? 2 : p + 1));
       const m: Record<string, string> = {};
       data.forEach((s) => { m[s.session_id] = s.preview || "New chat"; });
       setPreviews((prev) => (initial ? m : { ...prev, ...m }));
+      if (initial) setHistoryPreviews(m); else mergeHistoryPreviews(m);
+      const merged = initial ? data : [...items, ...data];
+      setHistorySessions(merged);
     } catch (e: any) {
       setError(e?.message || "Lỗi tải lịch sử");
     } finally {
@@ -63,28 +82,22 @@ export default function HistoryPage() {
   };
 
   useEffect(() => {
-    try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem("history_page_cache") : null;
-      if (raw) {
-        const cache = JSON.parse(raw);
-        const ttl = 10 * 60 * 1000;
-        if (Date.now() - (cache.ts || 0) < ttl) {
-          setItems(Array.isArray(cache.items) ? cache.items : []);
-          setPreviews(typeof cache.previews === "object" && cache.previews ? cache.previews : {});
-          setHasMore(Boolean(cache.hasMore));
-          setPage(Number(cache.page) || 2);
-          return;
-        }
-      }
-    } catch {}
+    if (historyHasLoaded && historySessions.length > 0) {
+      setItems(historySessions);
+      setPreviews(historyPreviews);
+      setHasMore(historyHasMore);
+      setPage(historySkip > 0 ? Math.floor(historySkip / limit) + 1 : 2);
+      return;
+    }
     load(true);
+    setHistoryHasLoaded(true);
   }, []);
 
   useEffect(() => {
-    try {
-      const toStore = { ts: Date.now(), items, previews, hasMore, page };
-      localStorage.setItem("history_page_cache", JSON.stringify(toStore));
-    } catch {}
+    setHistorySessions(items);
+    setHistoryPreviews(previews);
+    setHistoryHasMore(hasMore);
+    setHistorySkip((page - 1) * limit);
   }, [items, previews, hasMore, page]);
 
   useEffect(() => {

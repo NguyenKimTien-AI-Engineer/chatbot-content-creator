@@ -15,6 +15,7 @@ import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { api, SessionInfo, HistoryItem } from "@/lib/api";
+import { useContentStore } from "@/store/content-store";
 import {
   Sidebar,
   SidebarContent,
@@ -78,13 +79,27 @@ export function AppSidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const {
+    historySessions,
+    setHistorySessions,
+    historyPreviews,
+    setHistoryPreviews,
+    mergeHistoryPreviews,
+    historyHasLoaded,
+    setHistoryHasLoaded,
+    historyHasMore,
+    setHistoryHasMore,
+    historySkip,
+    setHistorySkip,
+    historyLimit,
+  } = useContentStore();
+  const sessions = historySessions;
+  const previews = historyPreviews;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [skip, setSkip] = useState(0);
-  const limit = 20;
-  const [hasMore, setHasMore] = useState(true);
+  const [skip, setSkip] = useState(historySkip || 0);
+  const limit = historyLimit || 20;
+  const [hasMore, setHasMore] = useState(historyHasMore);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const doLoad = useCallback(async () => {
@@ -95,22 +110,23 @@ export function AppSidebar() {
       const res = await api.getSessionsCached({ limit, skip });
       const list = res?.data || [];
       if (mounted) {
-        setSessions((prev) => {
-          const merged = skip === 0 ? list : [...prev, ...list];
-          const seen = new Set<string>();
-          return merged.filter((s) => {
-            const id = s.session_id || "";
-            if (seen.has(id)) return false;
-            seen.add(id);
-            return true;
-          });
+        const mergedBase = skip === 0 ? list : [...sessions, ...list];
+        const seen = new Set<string>();
+        const merged = mergedBase.filter((s) => {
+          const id = s.session_id || "";
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
         });
-        setHasMore((res?.data?.length || 0) === limit);
+        setHistorySessions(merged);
+        const nextHasMore = (res?.data?.length || 0) === limit;
+        setHasMore(nextHasMore);
+        setHistoryHasMore(nextHasMore);
       }
       if (mounted) {
         const m: Record<string, string> = {};
         list.forEach((s) => { m[s.session_id] = s.preview || "New chat"; });
-        setPreviews((prev) => (skip === 0 ? m : { ...prev, ...m }));
+        if (skip === 0) setHistoryPreviews(m); else mergeHistoryPreviews(m);
       }
     } catch (e: any) {
       if (mounted) setError(e?.message || "Lỗi tải lịch sử");
@@ -121,7 +137,14 @@ export function AppSidebar() {
   }, [limit, skip]);
 
   useEffect(() => {
+    if (historyHasLoaded && sessions.length > 0) {
+      setHasMore(historyHasMore);
+      setSkip(historySkip || 0);
+      return;
+    }
     const cleanup = doLoad();
+    setHistoryHasLoaded(true);
+    setHistorySkip(skip);
     return () => { cleanup && typeof cleanup === "function" && cleanup(); };
   }, [doLoad]);
 
@@ -135,20 +158,18 @@ export function AppSidebar() {
           const sid: string = data.session_id;
           const preview: string = String(data.preview || "New chat");
           const updated_at: string = String(data.updated_at || new Date().toISOString());
-          setPreviews((prev) => ({ ...prev, [sid]: preview }));
-          setSessions((prev) => {
-            const idx = prev.findIndex((s) => s.session_id === sid);
-            const updated: SessionInfo = {
-              session_id: sid,
-              user_id: prev[idx]?.user_id || "",
-              updated_at,
-              last_activity: updated_at,
-              created_at: prev[idx]?.created_at || undefined,
-              preview,
-            };
-            const next = idx >= 0 ? [updated, ...prev.filter((s) => s.session_id !== sid)] : [updated, ...prev];
-            return next.slice(0, 100);
-          });
+          mergeHistoryPreviews({ [sid]: preview });
+          const idx = sessions.findIndex((s) => s.session_id === sid);
+          const updated: SessionInfo = {
+            session_id: sid,
+            user_id: sessions[idx]?.user_id || "",
+            updated_at,
+            last_activity: updated_at,
+            created_at: sessions[idx]?.created_at || undefined,
+            preview,
+          };
+          const next = idx >= 0 ? [updated, ...sessions.filter((s) => s.session_id !== sid)] : [updated, ...sessions];
+          setHistorySessions(next.slice(0, 100));
         }
       } catch {}
     };
@@ -163,7 +184,9 @@ export function AppSidebar() {
     const obs = new IntersectionObserver((entries) => {
       const [e] = entries;
       if (e.isIntersecting && !loading) {
-        setSkip((s) => s + limit);
+        const next = skip + limit;
+        setSkip(next);
+        setHistorySkip(next);
       }
     }, { root: null, rootMargin: "200px", threshold: 0 });
     obs.observe(el);
