@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, Smile, Plus } from "lucide-react";
+import { Send, Bot, Smile, Plus, Loader2, Paperclip } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import Image from "next/image";
 import { Header } from "@/components/layout/header";
@@ -44,6 +44,19 @@ function getOrCreateAuthToken(): string {
     localStorage.setItem('auth_token', token);
   }
   return token;
+}
+
+function getOrCreateDefaultSessionId(): string {
+  try {
+    let sid = localStorage.getItem('default_session_id');
+    if (!sid) {
+      sid = generateRandomHistoryId();
+      localStorage.setItem('default_session_id', sid);
+    }
+    return sid;
+  } catch {
+    return generateRandomHistoryId();
+  }
 }
 
 function fixLinksInHtml(rawHtml: string): string {
@@ -521,6 +534,10 @@ async function streamChat(
 
 export default function ModernChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [convPage, setConvPage] = useState(1);
+  const convLimit = 50;
+  const [convHasMore, setConvHasMore] = useState(true);
+  const [convLoading, setConvLoading] = useState(false);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [systemInstructionUser, setSystemInstructionUser] = useState("");
@@ -617,7 +634,7 @@ export default function ModernChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!sessionId) setSessionId(generateRandomHistoryId());
+    if (!sessionId) setSessionId(getOrCreateDefaultSessionId());
   }, [sessionId]);
 
   useEffect(() => {
@@ -637,23 +654,11 @@ export default function ModernChatPage() {
 
   const loadConversation = async (sid: string) => {
     try {
-      const limit = 100;
-      let page = 1;
-      const all: any[] = [];
-      while (true) {
-        const res = await api.getHistoryCached({ session_id: sid, page, limit });
-        const list = res?.data || [];
-        all.push(...list);
-        if (list.length < limit || page >= 20) break;
-        page += 1;
-      }
-      const sorted = all.sort((a, b) => {
-        const ta = new Date((a.timestamp as any) || (a.created_at as any) || Date.now()).getTime();
-        const tb = new Date((b.timestamp as any) || (b.created_at as any) || Date.now()).getTime();
-        return ta - tb;
-      });
+      setConvLoading(true);
+      const res = await api.getHistory({ session_id: sid, page: 1, limit: convLimit });
+      const list = res?.data || [];
       const rebuilt: ChatMessage[] = [];
-      for (const h of sorted) {
+      for (const h of list) {
         const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
         const userContent = h.image_url ? { text: h.query, images: [h.image_url] } : h.query;
         rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: userContent, timestamp: t });
@@ -666,7 +671,35 @@ export default function ModernChatPage() {
         }
       }
       setMessages(rebuilt);
-    } catch {}
+      setConvPage(1);
+      setConvHasMore(list.length === convLimit);
+    } catch {} finally { setConvLoading(false); }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!sessionId || convLoading || !convHasMore) return;
+    try {
+      setConvLoading(true);
+      const nextPage = convPage + 1;
+      const res = await api.getHistory({ session_id: sessionId, page: nextPage, limit: convLimit });
+      const list = res?.data || [];
+      const rebuilt: ChatMessage[] = [];
+      for (const h of list) {
+        const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
+        const userContent = h.image_url ? { text: h.query, images: [h.image_url] } : h.query;
+        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: userContent, timestamp: t });
+        rebuilt.push({ id: `${h.history_id}-a`, role: "assistant", content: h.answer, timestamp: t });
+        if (h.reference && Array.isArray(h.reference) && h.reference.length > 0) {
+          rebuilt.push({ id: `${h.history_id}-r`, role: "reference", content: h.reference, timestamp: t });
+        }
+        if (h.chart) {
+          rebuilt.push({ id: `${h.history_id}-c`, role: "chart", content: h.chart, timestamp: t });
+        }
+      }
+      setMessages((prev) => [...prev, ...rebuilt]);
+      setConvPage(nextPage);
+      setConvHasMore(list.length === convLimit);
+    } catch {} finally { setConvLoading(false); }
   };
 
   useEffect(() => {
@@ -996,6 +1029,11 @@ export default function ModernChatPage() {
 
           {/* Messages / Empty State */}
           {messages.length === 0 ? (
+            convLoading ? (
+              <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
+                <Loader2 className="w-6 h-6 text-gray-500 animate-spin" />
+              </main>
+            ) : (
             <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
               <div className="max-w-2xl w-full mx-auto flex flex-col items-center">
                 <h1 className="text-5xl font-semibold tracking-tight text-gray-900 mb-6 select-none">MEKONGAI</h1>
@@ -1054,12 +1092,22 @@ export default function ModernChatPage() {
                           >
                             <Plus className="w-5 h-5 text-gray-400" />
                           </button>
+
                           {showPlusMenu && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                            <div
+                              className="
+                                absolute z-10 
+                                bottom-full mb-2
+                                w-56 rounded-xl 
+                                border border-gray-200 
+                                bg-white shadow-md p-2
+                              "
+                            >
                               <button
                                 onClick={handleAttachClick}
-                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                                className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
                               >
+                                <Paperclip className="w-4 h-4 text-gray-500" />
                                 Add photos & files
                               </button>
                             </div>
@@ -1124,6 +1172,7 @@ export default function ModernChatPage() {
                 </p>
               </div>
             </main>
+            )
           ) : (
           <main className="flex-1 overflow-y-auto px-4 md:px-6 py-6 bg-gray-50">
             <div className="max-w-4xl mx-auto space-y-6">
@@ -1137,6 +1186,17 @@ export default function ModernChatPage() {
                 />
               </div> */}
 
+              {convHasMore && (
+                <div className="flex items-center justify-center">
+                  <button
+                    onClick={loadOlderMessages}
+                    disabled={convLoading}
+                    className="px-3 py-1.5 text-xs rounded border hover:bg-gray-50"
+                  >
+                    {convLoading ? "Đang tải tin nhắn cũ…" : "Tải thêm tin nhắn cũ"}
+                  </button>
+                </div>
+              )}
               {messages.filter((m) => !(m.role === "reference" && !refToggle)).map((message, index) => (
                 <div
                   key={message.id}
@@ -1336,12 +1396,22 @@ export default function ModernChatPage() {
                           >
                             <Plus className="w-5 h-5 text-gray-400" />
                           </button>
+
                           {showPlusMenu && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                            <div
+                              className="
+                                absolute z-10 
+                                bottom-full mb-2
+                                w-56 rounded-xl 
+                                border border-gray-200 
+                                bg-white shadow-md p-2
+                              "
+                            >
                               <button
                                 onClick={handleAttachClick}
-                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                                className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
                               >
+                                <Paperclip className="w-4 h-4 text-gray-500" />
                                 Add photos & files
                               </button>
                             </div>

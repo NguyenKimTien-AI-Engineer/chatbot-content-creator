@@ -6,7 +6,7 @@ Cung cấp CRUD operations cho history management với MongoDB.
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Query, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Query, Depends, status, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from collections import defaultdict
@@ -16,6 +16,25 @@ import uuid
 from controllers.databases.nosql.mongodb import get_mongodb_manager, MongoDBManager
 
 router = APIRouter()
+
+active_ws_connections: Dict[str, List[WebSocket]] = defaultdict(list)
+
+async def broadcast_session_update(user_id: str, payload: Dict[str, Any]) -> None:
+    conns = active_ws_connections.get(user_id, [])
+    if not conns:
+        return
+    data = {"type": "session_update", **payload}
+    living: List[WebSocket] = []
+    for ws in conns:
+        try:
+            await ws.send_json(data)
+            living.append(ws)
+        except Exception:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+    active_ws_connections[user_id] = living
 
 # Rate limiting storage - in production, use Redis or similar
 rate_limit_storage: Dict[str, List[float]] = defaultdict(list)
@@ -322,7 +341,14 @@ async def create_history(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Không thể lưu lịch sử"
             )
-        
+        await broadcast_session_update(
+            current_user,
+            {
+                "session_id": session_id,
+                "preview": request.query,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+        )
         return HistoryCreateResponse(
             message="Lưu lịch sử thành công",
             data={
@@ -517,10 +543,30 @@ async def get_user_sessions(
         )
         total = len(sessions_sorted)
         paged = sessions_sorted[skip: skip + limit]
+        enriched = []
+        for s in paged:
+            try:
+                sid = s.get("session_id") or s.get("id") or ""
+                latest = await db.get_user_history(
+                    user_id=current_user,
+                    session_id=sid,
+                    limit=1,
+                    skip=0,
+                )
+                if latest:
+                    item = latest[0]
+                    q = str(item.get("query", ""))
+                    head = q.split("\n")[0] if q else ""
+                    s["preview"] = head or "New chat"
+                else:
+                    s["preview"] = "New chat"
+            except Exception:
+                s["preview"] = "New chat"
+            enriched.append(s)
         return {
             "success": True,
             "message": "Lấy danh sách sessions thành công",
-            "data": paged,
+            "data": enriched,
             "total": total,
         }
         
@@ -610,6 +656,35 @@ async def get_history_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Lỗi server khi lấy ảnh: {str(e)}"
         )
+
+@router.websocket("/ws/history")
+async def ws_history(websocket: WebSocket):
+    try:
+        token = websocket.query_params.get("token")
+        if not token or len(token) < 8:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        await websocket.accept()
+        user_id = token
+        active_ws_connections[user_id].append(websocket)
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+    finally:
+        try:
+            for uid, lst in list(active_ws_connections.items()):
+                if websocket in lst:
+                    lst.remove(websocket)
+                    if not lst:
+                        active_ws_connections.pop(uid, None)
+                    break
+        except Exception:
+            pass
 @router.delete(
     "/v1/history/sessions/{session_id}",
     response_model=dict,

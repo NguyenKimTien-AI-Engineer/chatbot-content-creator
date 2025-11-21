@@ -272,6 +272,7 @@ export interface SessionInfo {
   last_activity?: string;
   created_at?: string;
   updated_at?: string;
+  preview?: string;
 }
 
 export interface SessionsResponse {
@@ -528,6 +529,21 @@ export const api = {
     const data = response.data as SessionsResponse;
     sessionsCache.set(key, { ts: Date.now(), data: data.data });
     return data;
+  },
+  connectHistoryWS: (): WebSocket | null => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+      const host = process.env.NEXT_PUBLIC_SERVER_HOST || 'localhost';
+      const port = process.env.NEXT_PUBLIC_API_PORT || '1979';
+      const base = apiUrl ? apiUrl.replace(/\/$/, '') : `http://${host}:${port}`;
+      const proto = base.startsWith('https') ? 'wss' : 'ws';
+      let token: string | null = null;
+      try { token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null; } catch {}
+      const wsUrl = `${proto}://${base.replace(/^https?:\/\//, '')}/ws/history?token=${encodeURIComponent(token || '')}`;
+      return new WebSocket(wsUrl);
+    } catch {
+      return null;
+    }
   },
 };
 
