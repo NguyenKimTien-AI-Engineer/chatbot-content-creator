@@ -226,6 +226,7 @@ export interface HistoryItem {
   feedback_status?: string;
   reference?: any[];
   chart?: any;
+  image_url?: string;
   timestamp?: string;
   created_at?: string;
 }
@@ -239,6 +240,7 @@ export interface HistoryCreateRequest {
   feedback_status?: string;
   reference?: any[];
   chart?: any;
+  image_url?: string;
 }
 
 export interface HistoryListResponse {
@@ -418,6 +420,17 @@ export const api = {
         localStorage.setItem('history_updated_at', String(Date.now()));
       }
     } catch {}
+    return response.data;
+  },
+
+  uploadChatImage: async (file: File, user_id: string, session_id: string): Promise<{ status: number; message: string; data: { image_url: string } }> => {
+    const form = new FormData();
+    form.append('user_id', user_id);
+    form.append('session_id', session_id);
+    form.append('image', file);
+    const response = await apiClient.post('/api/v1/images/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return response.data;
   },
 

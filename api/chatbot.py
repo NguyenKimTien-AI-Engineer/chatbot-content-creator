@@ -11,6 +11,7 @@ from typing import Union, List, Dict, Any, Optional
 from bot.v1 import bot_suggestion, chatbot_custom_prompt
 from controllers.databases.nosql.mongodb import get_mongodb_manager
 from api.image import _analyze_image_bytes
+from controllers.aws.connect_s3 import S3Service
 
 router = APIRouter()
 
@@ -489,25 +490,17 @@ async def chatbot_with_image_endpoint(
         # Analyze image
         image_analysis = await _analyze_image_bytes(image_bytes, image.content_type)
         
-        # Store image in MongoDB
-        db = await get_mongodb_manager()
-        image_id = str(uuid.uuid4())
-        
-        # Save image to MongoDB
-        image_doc_id = await db.save_image(
-            image_id=image_id,
-            user_id=user_id,
+        # Upload image to S3
+        s3 = S3Service()
+        document_id = session_id.strip() or str(uuid.uuid4())
+        image_url = await s3.upload_image(
             image_data=image_bytes,
-            content_type=image.content_type,
-            metadata={
-                "filename": image.filename,
-                "size": len(image_bytes),
-                "query": query
-            }
+            file_name=image.filename or "image",
+            user_id=user_id,
+            document_id=document_id,
+            image_index=0,
+            content_type=image.content_type or "image/jpeg",
         )
-        
-        if not image_doc_id:
-            print("Cảnh báo: Không thể lưu ảnh vào MongoDB")
         
         # Combine query with image analysis
         enhanced_query = f"{query}\n\n[Phân tích ảnh]: {image_analysis}"
@@ -537,7 +530,7 @@ async def chatbot_with_image_endpoint(
             "data": {
                 "answer": answer, 
                 "reference": references,
-                "image_id": image_id if image_doc_id else None,
+                "image_url": image_url,
                 "image_analysis": image_analysis
             }
         }

@@ -9,7 +9,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import { api } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
 
-type Role = "user" | "assistant" | "chart" | "reference";
+type Role = "user" | "assistant" | "chart" | "reference" | "image";
 
 interface ChatMessage {
   id: string;
@@ -555,7 +555,7 @@ export default function ModernChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const saveChatHistory = async (userQuery: string, assistantAnswer: string, references?: any[], chart?: any, messageId?: string) => {
+  const saveChatHistory = async (userQuery: string, assistantAnswer: string, references?: any[], chart?: any, messageId?: string, imageUrl?: string | null) => {
     try {
       // Check if this message has already been saved
       if (messageId && savedHistoryIdsRef.current.has(messageId)) {
@@ -573,6 +573,7 @@ export default function ModernChatPage() {
         answer: assistantAnswer,
         reference: references || [],
         chart: chart || null,
+        image_url: imageUrl || undefined,
       };
       
       const response = await api.saveHistory(historyData);
@@ -654,7 +655,8 @@ export default function ModernChatPage() {
       const rebuilt: ChatMessage[] = [];
       for (const h of sorted) {
         const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
-        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: h.query, timestamp: t });
+        const userContent = h.image_url ? { text: h.query, images: [h.image_url] } : h.query;
+        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: userContent, timestamp: t });
         rebuilt.push({ id: `${h.history_id}-a`, role: "assistant", content: h.answer, timestamp: t });
         if (h.reference && Array.isArray(h.reference) && h.reference.length > 0) {
           rebuilt.push({ id: `${h.history_id}-r`, role: "reference", content: h.reference, timestamp: t });
@@ -687,11 +689,14 @@ export default function ModernChatPage() {
     const now = Date.now();
     const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
     const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+    const localFiles = attachedFiles.slice(0, 2);
+    const localPreviews = attachedPreviews.slice(0, 2);
+    const localAnalyses = imageAnalyses.slice(0, 2);
     const textToSend = input.trim() !== ""
       ? input.trim()
-      : (attachedFiles.length >= 2 ? defaultTwo : defaultOne);
-    const contentToSend: any = attachedPreviews.length > 0
-      ? { text: textToSend, images: attachedPreviews.slice(0, 2) }
+      : (localFiles.length >= 2 ? defaultTwo : defaultOne);
+    const contentToSend: any = localPreviews.length > 0
+      ? { text: textToSend, images: localPreviews }
       : textToSend;
     const userMessage: ChatMessage = {
       id: now.toString(),
@@ -704,6 +709,13 @@ export default function ModernChatPage() {
     setInput("");
     setIsTyping(true);
     setPendingChart(false);
+
+    setAttachedPreviews([]);
+    setAttachedFiles([]);
+    setImageAnalyses([]);
+    setShowPlusMenu(false);
+    setShowEmojiPicker(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
 
     const queryLower = String(
       typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || ""
@@ -722,15 +734,23 @@ export default function ModernChatPage() {
     }
 
     // Đảm bảo có phân tích cho các ảnh đã đính kèm
-    const analyses: string[] = [...imageAnalyses];
-    for (let i = 0; i < attachedFiles.length && i < 2; i++) {
+    const analyses: string[] = [...localAnalyses];
+    for (let i = 0; i < localFiles.length && i < 2; i++) {
       if (!analyses[i]) {
-        const txt = await analyzeImageFile(attachedFiles[i]);
+        const txt = await analyzeImageFile(localFiles[i]);
         analyses[i] = txt || "";
       }
     }
     setImageAnalyses(analyses);
     const joinImageAnalyses = (arr: string[]) => arr.slice(0, 2).map((t, i) => `Ảnh ${i + 1}: ${t}`).join("\n\n");
+
+    let uploadedImageUrl: string | null = null;
+    if (localFiles.length > 0) {
+      try {
+        const resp = await api.uploadChatImage(localFiles[0], userId, sessionId);
+        uploadedImageUrl = resp?.data?.image_url || null;
+      } catch {}
+    }
 
     const payload = {
       user_id: userId,
@@ -743,14 +763,7 @@ export default function ModernChatPage() {
       image_text: joinImageAnalyses(analyses),
     };
 
-    // Xóa preview/đính kèm ảnh khỏi khung nhập ngay sau khi chuẩn bị payload
-    attachedPreviews.forEach((url) => { try { URL.revokeObjectURL(url); } catch { /* noop */ } });
-    setAttachedPreviews([]);
-    setAttachedFiles([]);
-    setImageAnalyses([]);
-    setShowPlusMenu(false);
-    setShowEmojiPicker(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    // Đã xóa preview/đính kèm ảnh khỏi khung nhập ngay sau khi gửi
 
     const assistantId = (Date.now() + 1).toString();
     assistantStreamingIdRef.current = assistantId;
@@ -834,7 +847,7 @@ export default function ModernChatPage() {
       
       // Lưu lịch sử với delay nhỏ để đảm bảo messages đã được cập nhật
       setTimeout(() => {
-        saveChatHistory(userQuery, fullAnswer, references, chart, messageId);
+        saveChatHistory(userQuery, fullAnswer, references, chart, messageId, uploadedImageUrl);
       }, 100);
     }
   };
@@ -1103,14 +1116,8 @@ export default function ModernChatPage() {
                 {historyError && (
                   <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
                 )}
-                {isSavingHistory && (
-                  <p className="text-xs text-blue-600 text-center mt-2" aria-live="polite">Đang lưu lịch sử...</p>
-                )}
                 {historyError && (
                   <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
-                )}
-                {isSavingHistory && (
-                  <p className="text-xs text-blue-600 text-center mt-2" aria-live="polite">Đang lưu lịch sử...</p>
                 )}
                 <p className="text-xs text-gray-400 text-center mt-3">
                   AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
@@ -1143,13 +1150,13 @@ export default function ModernChatPage() {
                       message.role === "user" ? "bg-white border border-gray-200" : "bg-black"
                     }`}
                   >
-                    {message.role === "user" ? (
+                    {(message.role === "user" || message.role === "image") ? (
                       <Image src="/OIP.webp" alt="KAT" width={20} height={20} className="rounded-sm object-contain" />
                     ) : (
                       <Bot className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <div className={`flex flex-col gap-1 max-w-[70%] ${message.role === "user" ? "items-end" : "items-start"}`}>
+                  <div className={`flex flex-col gap-1 max-w-[70%] ${(message.role === "user" || message.role === "image") ? "items-end" : "items-start"}`}>
                     {message.role === "reference" ? (
                       refToggle ? (
                         <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
@@ -1174,6 +1181,11 @@ export default function ModernChatPage() {
                     ) : message.role === "chart" ? (
                       <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
                         <div dangerouslySetInnerHTML={{ __html: String(message.content) }} />
+                      </div>
+                    ) : message.role === "image" ? (
+                      <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={String(message.content)} alt="uploaded" className="max-w-full rounded-xl border border-gray-200" />
                       </div>
                     ) : (
                       <div className={`rounded-2xl px-4 py-3 shadow-sm ${message.role === "user" ? "bg-white border border-gray-200 text-gray-800 rounded-tr-md" : "bg-white border border-gray-200 text-gray-800 rounded-tl-md"}`}>
@@ -1268,9 +1280,6 @@ export default function ModernChatPage() {
                 )}
                 {historyError && (
                   <p className="text-xs text-red-600 mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
-                )}
-                {isSavingHistory && (
-                  <p className="text-xs text-blue-600 mt-2" aria-live="polite">Đang lưu lịch sử...</p>
                 )}
                 <div className="flex items-center gap-2">
                   <div className="flex-1">

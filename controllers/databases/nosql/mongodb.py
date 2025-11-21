@@ -755,7 +755,7 @@ class MongoDBManager:
 
     async def save_history(self, user_id: str, history_id: str, session_id: str, query: str, 
                           answer: str, feedback: str, feedback_status: str, 
-                          references: Any, chart: Any, image_references: Optional[List[str]] = None) -> Optional[str]:
+                          references: Any, chart: Any, image_url: Optional[str] = None) -> Optional[str]:
         """
         Lưu lịch sử chat vào MongoDB.
         
@@ -791,7 +791,7 @@ class MongoDBManager:
                 "feedback_status": feedback_status,
                 "reference": references,
                 "chart": chart,
-                "image_references": image_references,
+                "image_url": image_url,
                 "timestamp": datetime.utcnow(),
                 "created_at": datetime.utcnow()
             }

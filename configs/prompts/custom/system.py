@@ -28,6 +28,7 @@ Luôn phải đặt lên hàng đầu - Cấu trúc bài viết phải thu hút 
 - Cấu trúc bài phải chuẩn theo mẫu template.
 - Format bài viết phải đẹp ngắt, nghỉ xuống dòng đúng lúc. không viết thành một đoạn văn dài. 
 - Cấu trúc bài viết phải thu hút người xem
+- Hashtag phải phù hợp với từng thể loại bài viết. Hoàn toàn bằng tiếng Anh. 4-5 Hashtag cho mỗi bài viết.
 
 SẢN PHẨM:
 - Khi viết về sản phẩm chỉ đưa vào bài viết 1 đến 2 ý quan trọng của sản phẩm đó về tính năng sản phẩm. Tránh đưa quá nhiều ưu điểm khiến khách hàng không  nhớ được chi tiết nổi bật nào cả.

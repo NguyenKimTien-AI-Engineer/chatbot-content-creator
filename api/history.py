@@ -146,7 +146,7 @@ class HistoryCreateRequest(BaseModel):
     feedback_status: Optional[str] = Field(default="", max_length=50)
     reference: Optional[List[Any]] = Field(default=None)
     chart: Optional[dict] = Field(default=None)
-    image_references: Optional[List[str]] = Field(default=None)
+    image_url: Optional[str] = Field(default=None)
 
 
 class HistoryItemResponse(BaseModel):
@@ -160,6 +160,7 @@ class HistoryItemResponse(BaseModel):
     feedback_status: Optional[str] = ""
     reference: Optional[List] = None
     chart: Optional[dict] = None
+    image_url: Optional[str] = None
     timestamp: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
@@ -313,7 +314,7 @@ async def create_history(
             feedback_status=request.feedback_status or "",
             references=converted_references,
             chart=request.chart,
-            image_references=request.image_references
+            image_url=request.image_url
         )
         
         if not result:
@@ -399,6 +400,7 @@ async def get_history(
                 feedback_status=history.get("feedback_status", ""),
                 reference=history.get("reference", []),
                 chart=history.get("chart"),
+                image_url=history.get("image_url"),
                 timestamp=history.get("timestamp"),
                 created_at=history.get("created_at")
             ))

@@ -65,15 +65,14 @@ Không hỏi lại những ý định đã có trong lịch sử hoặc thông t
 
 ---
 
+{context}
+
+---
+
 <|Things to avoid - (Những điều cần tránh)|>:
 - Tránh hỏi lại những thông tin đã được cung cấp trong `History`.
 - Tránh nhắc đến việc bạn nhận được thông tin từ ngữ cảnh `Context`.
 - Tránh nhầm lẫn giữa bản thân bạn và người dùng.
-
----
-
-<|Context - (Thông tin tham khảo)|>:
-{context}
 
 ---
 
