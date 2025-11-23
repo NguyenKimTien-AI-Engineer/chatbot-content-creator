@@ -1,26 +1,46 @@
+// api.ts
 import axios from 'axios';
 
-// API Base URL - use environment variable or fallback to proxy/localhost
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
-  process.env.NODE_ENV === 'production' 
-    ? `http://${process.env.NEXT_PUBLIC_SERVER_HOST || 'localhost'}:${process.env.NEXT_PUBLIC_API_PORT || '8001'}` 
-    : '' // Use proxy in development
-);
+// ✅ Đơn giản, rõ ràng
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:1979';
 
-// Create axios instance
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 300000, // 5 minutes timeout
+  timeout: 300000,
   headers: {
     'Content-Type': 'application/json; charset=utf-8',
   },
 });
 
+function genAuthToken(length = 32): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let out = '';
+  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+function getOrCreateAuthTokenSafely(): string | null {
+  try {
+    if (typeof window === 'undefined') return null;
+    let token = localStorage.getItem('auth_token');
+    if (!token) {
+      token = genAuthToken();
+      localStorage.setItem('auth_token', token);
+    }
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
-    // Add auth token if available
-    const token = localStorage.getItem('auth_token');
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem('auth_token');
+    } catch {}
+    if (!token) token = getOrCreateAuthTokenSafely();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -90,26 +110,6 @@ export interface HealthResponse {
   status: string;
   message: string;
   timestamp: string;
-}
-
-export interface ContentHistoryItem {
-  id: string;
-  user_id: string;
-  content_type: string;
-  title: string;
-  created_at: string;
-  preview: string;
-}
-
-export interface ContentHistoryDetail {
-  id: string;
-  user_id: string;
-  content_type: string;
-  title: string;
-  content: string;
-  metadata: any;
-  created_at: string;
-  updated_at: string;
 }
 
 // Products API Types
@@ -199,40 +199,12 @@ export interface ProductCreateRequest {
   };
 }
 
-export interface ContentHistoryCreateRequest {
-  user_id?: string;
-  content_type: string;
-  title: string;
-  content: string;
-  metadata?: any;
-}
-
-// Chat Histories (MongoDB) Types
-export interface ChatHistoryMessage {
-  role: string;
-  content: any;
-  metadata?: Record<string, any> | null;
-}
-
-export interface CreateConversationPayload {
-  conversation_id: string;
-  user_id: string;
-  first_message?: ChatHistoryMessage | null;
-  metadata?: Record<string, any> | null;
-}
-
-export interface AppendMessagePayload {
-  conversation_id: string;
-  message: ChatHistoryMessage;
-}
-
 export interface ConversationItem {
   conversation_id: string;
   user_id: string;
   created_at?: string;
   updated_at?: string;
   preview?: string;
-  messages?: ChatHistoryMessage[];
   metadata?: Record<string, any> | null;
 }
 
@@ -241,6 +213,78 @@ export interface ConversationListData {
   page: number;
   limit: number;
   total: number;
+}
+
+// History API Types
+export interface HistoryItem {
+  history_id: string;
+  user_id: string;
+  session_id: string;
+  query: string;
+  answer: string;
+  feedback?: string;
+  feedback_status?: string;
+  reference?: any[];
+  chart?: any;
+  image_url?: string;
+  timestamp?: string;
+  created_at?: string;
+}
+
+export interface HistoryCreateRequest {
+  user_id: string;
+  session_id: string;
+  query: string;
+  answer: string;
+  feedback?: string;
+  feedback_status?: string;
+  reference?: any[];
+  chart?: any;
+  image_url?: string;
+}
+
+export interface HistoryListResponse {
+  success: boolean;
+  message: string;
+  data: HistoryItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface HistoryCreateResponse {
+  success: boolean;
+  message: string;
+  data: {
+    history_id: string;
+    inserted_id: string;
+  };
+}
+
+export interface HistoryDeleteResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface SessionInfo {
+  session_id: string;
+  user_id: string;
+  last_activity?: string;
+  created_at?: string;
+  updated_at?: string;
+  preview?: string;
+}
+
+export interface SessionsResponse {
+  success: boolean;
+  message: string;
+  data: SessionInfo[];
+  total: number;
+}
+
+export interface DeleteSessionResponse {
+  success: boolean;
+  message: string;
 }
 
 // API Functions
@@ -329,33 +373,6 @@ export const api = {
     return response.data;
   },
 
-  // Get saved content history
-  getContentHistory: async (page: number = 1, limit: number = 10) => {
-    const response = await apiClient.get(`/api/v1/content/history?limit=${limit}`);
-    return response.data;
-  },
-
-  // Content History API functions
-  createContentHistory: async (data: ContentHistoryCreateRequest): Promise<any> => {
-    const response = await apiClient.post('/api/v1/content/history', data);
-    return response.data;
-  },
-
-  getContentHistoryList: async (userId: string = 'default_user', limit: number = 10): Promise<ContentHistoryItem[]> => {
-    const response = await apiClient.get(`/api/v1/content/history?user_id=${userId}&limit=${limit}`);
-    return response.data;
-  },
-
-  getContentHistoryDetail: async (historyId: string): Promise<ContentHistoryDetail> => {
-    const response = await apiClient.get(`/api/v1/content/history/${historyId}`);
-    return response.data;
-  },
-
-  deleteContentHistory: async (historyId: string): Promise<any> => {
-    const response = await apiClient.delete(`/api/v1/content-history/${historyId}`);
-    return response.data;
-  },
-
   // Products API
   getProductsByCategory: async (category: string, limit: number = 20): Promise<ProductListResponse> => {
     const response = await apiClient.get(`/api/v1/products/category/${category}?limit=${limit}`);
@@ -394,33 +411,145 @@ export const api = {
     return response.data;
   },
 
-  // =========================
-  // MongoDB Chat Histories API
-  // =========================
-  historiesCreate: async (payload: CreateConversationPayload): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/create', payload);
+  // History API
+  saveHistory: async (data: HistoryCreateRequest): Promise<HistoryCreateResponse> => {
+    const response = await apiClient.post('/api/v1/history', data);
+    historyCache.clear();
+    sessionsCache.clear();
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('history_updated_at', String(Date.now()));
+      }
+    } catch {}
     return response.data;
   },
 
-  historiesAppend: async (payload: AppendMessagePayload): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/append', payload);
+  uploadChatImage: async (file: File, user_id: string, session_id: string): Promise<{ status: number; message: string; data: { image_url: string } }> => {
+    const form = new FormData();
+    form.append('user_id', user_id);
+    form.append('session_id', session_id);
+    form.append('image', file);
+    const response = await apiClient.post('/api/v1/images/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return response.data;
   },
 
-  historiesGet: async (conversationId: string): Promise<{ status: number; message: string; data: ConversationItem | null; }> => {
-    const response = await apiClient.post('/api/v1/histories/get', { conversation_id: conversationId });
+  getHistory: async (params?: {
+    user_id?: string;
+    session_id?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<HistoryListResponse> => {
+    const response = await apiClient.get('/api/v1/history', { params });
     return response.data;
   },
 
-  historiesList: async (userId: string, page: number = 1, limit: number = 20): Promise<{ status: number; message: string; data: ConversationListData; }> => {
-    const response = await apiClient.post('/api/v1/histories/list', { user_id: userId, page, limit });
+  deleteHistory: async (historyId: string): Promise<HistoryDeleteResponse> => {
+    const response = await apiClient.delete(`/api/v1/history/${historyId}`);
     return response.data;
   },
 
-  historiesDelete: async (conversationId: string): Promise<any> => {
-    const response = await apiClient.post('/api/v1/histories/delete', { conversation_id: conversationId });
+  getSessions: async (params?: { limit?: number; skip?: number }): Promise<SessionsResponse> => {
+    const response = await apiClient.get('/api/v1/history/sessions', { params });
     return response.data;
+  },
+
+  deleteSession: async (sessionId: string): Promise<DeleteSessionResponse> => {
+    try {
+      const response = await apiClient.delete(`/api/v1/history/sessions/${sessionId}`);
+      historyCache.clear();
+      sessionsCache.clear();
+      try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+      return response.data;
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 405) {
+        try {
+          const resp2 = await apiClient.delete(`/api/v1/history/sessions/${sessionId}/`);
+          historyCache.clear();
+          sessionsCache.clear();
+          try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+          return resp2.data;
+        } catch {
+          const resp3 = await apiClient.post(`/api/v1/history/sessions/delete`, { session_id: sessionId });
+          historyCache.clear();
+          sessionsCache.clear();
+          try { if (typeof window !== 'undefined') localStorage.setItem('history_updated_at', String(Date.now())); } catch {}
+          return resp3.data;
+        }
+      }
+      throw err;
+    }
+  },
+
+  getHistoryCached: async (params?: {
+    user_id?: string;
+    session_id?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<HistoryListResponse> => {
+    const key = JSON.stringify({
+      user_id: params?.user_id || 'current',
+      session_id: params?.session_id || 'all',
+      page: params?.page || 1,
+      limit: params?.limit || 20,
+    });
+    const cached = historyCache.get(key);
+    const ttl = 5 * 60 * 1000;
+    if (cached && Date.now() - cached.ts < ttl) {
+      return {
+        success: true,
+        message: 'cached',
+        data: cached.data,
+        total: cached.data.length,
+        page: params?.page || 1,
+        limit: params?.limit || 20,
+      };
+    }
+    const response = await apiClient.get('/api/v1/history', { params });
+    const data = response.data as HistoryListResponse;
+    historyCache.set(key, { ts: Date.now(), data: data.data });
+    return data;
+  },
+
+  getSessionsCached: async (params?: { limit?: number; skip?: number }): Promise<SessionsResponse> => {
+    const key = JSON.stringify({ limit: params?.limit ?? 30, skip: params?.skip ?? 0 });
+    const cached = sessionsCache.get(key);
+    const ttl = 2 * 60 * 1000;
+    if (cached && Date.now() - cached.ts < ttl) {
+      return {
+        success: true,
+        message: 'cached',
+        data: cached.data,
+        total: cached.data.length,
+      } as SessionsResponse;
+    }
+    const response = await apiClient.get('/api/v1/history/sessions', { params });
+    const data = response.data as SessionsResponse;
+    sessionsCache.set(key, { ts: Date.now(), data: data.data });
+    return data;
+  },
+  connectHistoryWS: (): WebSocket | null => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+      const host = process.env.NEXT_PUBLIC_SERVER_HOST || 'localhost';
+      const port = process.env.NEXT_PUBLIC_API_PORT || '1979';
+      const base = apiUrl ? apiUrl.replace(/\/$/, '') : `http://${host}:${port}`;
+      const proto = base.startsWith('https') ? 'wss' : 'ws';
+      let token: string | null = null;
+      try { token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null; } catch {}
+      const wsUrl = `${proto}://${base.replace(/^https?:\/\//, '')}/ws/history?token=${encodeURIComponent(token || '')}`;
+      return new WebSocket(wsUrl);
+    } catch {
+      return null;
+    }
   },
 };
 
 export default apiClient;
+
+type HistoryCacheEntry = { ts: number; data: HistoryItem[] };
+const historyCache: Map<string, HistoryCacheEntry> = new Map();
+type SessionsCacheEntry = { ts: number; data: SessionInfo[] };
+const sessionsCache: Map<string, SessionsCacheEntry> = new Map();

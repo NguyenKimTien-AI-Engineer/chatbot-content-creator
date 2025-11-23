@@ -1,9 +1,12 @@
 import json
 import os
 import uuid
+import asyncio
+from typing import Optional, Any
 
 from configs import constant, environment
 from controllers.data import clean
+from controllers.databases.nosql.mongodb import mongodb_manager
 
 ############################################################################################################
 # Save history
@@ -41,7 +44,8 @@ def save_history(user_id, history_id, session_id, query, answer, feedback, feedb
             # if reference:
             #     messages.append({"role": "assistant", "content": str(reference)})
 
-            environment.memory.add(messages, user_id=session_id)
+            if environment.memory is not None:
+                environment.memory.add(messages, user_id=session_id)
             
         except Exception as e:
             print("Error saving to memory: ", e)
@@ -86,8 +90,64 @@ def save_history_v2(user_id, history_id, session_id, query, answer, feedback, fe
     except Exception as e:
         print("Error saving history: ", e)
         return
+
+
+############################################################################################################
+# Save history - MongoDB version
+async def save_history_mongodb(user_id: str, history_id: str, session_id: str, query: str, 
+                                answer: str, feedback: str, feedback_status: str, 
+                                references: Any, chart: Any) -> Optional[str]:
+    """
+    Lưu lịch sử chat vào MongoDB.
     
-    
+    Args:
+        user_id: ID của người dùng
+        history_id: ID của lịch sử
+        session_id: ID của session
+        query: Câu hỏi của user
+        answer: Câu trả lời của AI
+        feedback: Phản hồi của user
+        feedback_status: Trạng thái feedback
+        references: Tài liệu tham khảo
+        chart: Dữ liệu biểu đồ
+        
+    Returns:
+        str: ID của document đã lưu, None nếu thất bại
+    """
+    try:
+        if not history_id:
+            history_id = str(uuid.uuid4())
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            
+        # Lưu vào MongoDB
+        result = await mongodb_manager.save_history(
+            user_id=user_id,
+            history_id=history_id,
+            session_id=session_id,
+            query=query,
+            answer=answer,
+            feedback=feedback,
+            feedback_status=feedback_status,
+            references=references,
+            chart=chart
+        )
+        
+        # Cập nhật memory nếu có
+        try:
+            if environment.memory is not None:
+                messages = [{"role": "user", "content": query}, {"role": "assistant", "content": str(answer)}]
+                environment.memory.add(messages, user_id=session_id)
+        except Exception as e:
+            print("Error saving to memory: ", e)
+            
+        return result
+        
+    except Exception as e:
+        print("Error saving history to MongoDB: ", e)
+        return None
+
+
 ############################################################################################################
 # Load history
 def get_history(user_id, session_id):
@@ -150,6 +210,49 @@ def get_all_history_user(user_id):
 
 
 ############################################################################################################
+# Load history - MongoDB version
+async def get_history_mongodb(user_id: str, session_id: str) -> list:
+    """
+    Lấy lịch sử chat từ MongoDB.
+    
+    Args:
+        user_id: ID của người dùng
+        session_id: ID của session
+        
+    Returns:
+        list: Danh sách lịch sử chat
+    """
+    try:
+        # Lấy từ MongoDB
+        history = await mongodb_manager.get_history(user_id, session_id)
+        return history
+        
+    except Exception as e:
+        print("Lỗi khi lấy history từ MongoDB: ", e)
+        return []
+
+
+async def get_all_history_user_mongodb(user_id: str) -> list:
+    """
+    Lấy tất cả lịch sử của một user từ MongoDB.
+    
+    Args:
+        user_id: ID của người dùng
+        
+    Returns:
+        list: Danh sách các session history
+    """
+    try:
+        # Lấy từ MongoDB
+        histories = await mongodb_manager.get_all_history_user(user_id)
+        return histories
+        
+    except Exception as e:
+        print("Lỗi khi lấy tất cả history user từ MongoDB: ", e)
+        return []
+
+
+############################################################################################################
 def update_feedback(user_id, history_id, new_feedback, new_feedback_status, session_id=None):
     try:
         user_directory = f"{constant.DATA_HISTORY}/{user_id}"
@@ -194,6 +297,37 @@ def update_feedback(user_id, history_id, new_feedback, new_feedback_status, sess
         return False, []
 
 
+async def update_feedback_mongodb(user_id: str, history_id: str, new_feedback: str, 
+                                 new_feedback_status: str, session_id: str = None) -> tuple[bool, list]:
+    """
+    Cập nhật feedback cho một lịch sử trong MongoDB.
+    
+    Args:
+        user_id: ID của người dùng
+        history_id: ID của lịch sử cần cập nhật
+        new_feedback: Feedback mới
+        new_feedback_status: Trạng thái feedback mới
+        session_id: ID của session (optional)
+        
+    Returns:
+        tuple: (success: bool, updated_entries: List)
+    """
+    try:
+        # Cập nhật trong MongoDB
+        success, updated_entries = await mongodb_manager.update_feedback(
+            user_id=user_id,
+            history_id=history_id,
+            new_feedback=new_feedback,
+            new_feedback_status=new_feedback_status,
+            session_id=session_id
+        )
+        return success, updated_entries
+        
+    except Exception as e:
+        print("Lỗi khi cập nhật feedback trong MongoDB: ", e)
+        return False, []
+
+
 def get_history_context(user_id, query, session_id):
     history_context = ""
 
@@ -214,15 +348,145 @@ def get_history_context(user_id, query, session_id):
         #     history_context += f"\n- References to previous question (for reference only when asking previous question): [{str(clean_json_data(item['reference']))}]"
 
     history_context += f"\n\n- User: {query}\n"
-    relevant_memories = environment.memory.search(query=query, user_id=session_id, limit=5)
-    history_context_ = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
-    if history_context_:
-        history_context += "⚙️ Relevant Memories: " + str(history_context_)
-        print("⚙️ Relevant Memories: ", history_context_)
+    history_context_ = ""
+    try:
+        if environment.memory:
+            relevant_memories = environment.memory.search(query=query, user_id=session_id, limit=5)
+            history_context_ = "\n".join(f"- {entry['memory']}" for entry in relevant_memories.get("results", []))
+            if history_context_:
+                history_context += "⚙️ Relevant Memories: " + str(history_context_)
+                print("⚙️ Relevant Memories: ", history_context_)
+    except Exception:
+        pass
 
     history_context = clean.clean_special_characters(history_context)
 
     return history_context
+
+
+async def get_history_context_v2_mongodb(user_id: str, query: str, session_id: str, limit: int = 5) -> str:
+    """
+    Lấy context từ lịch sử chat trong MongoDB (version 2 - giới hạn 5 items).
+    
+    Args:
+        user_id: ID của người dùng
+        query: Câu hỏi hiện tại
+        session_id: ID của session
+        limit: Số lượng lịch sử tối đa
+        
+    Returns:
+        str: Context string để gửi vào prompt
+    """
+    try:
+        # Lấy context từ MongoDB với limit nhỏ hơn
+        history_context = await mongodb_manager.get_history_context(
+            user_id=user_id,
+            query=query,
+            session_id=session_id,
+            limit=limit
+        )
+        
+        history_context = clean.clean_special_characters(history_context)
+        return history_context
+        
+    except Exception as e:
+        print("Lỗi khi lấy history context v2 từ MongoDB: ", e)
+        return ""
+
+
+async def get_user_sessions_mongodb(user_id: str) -> list:
+    """
+    Lấy tất cả sessions của một user từ MongoDB.
+    
+    Args:
+        user_id: ID của người dùng
+        
+    Returns:
+        list: Danh sách sessions
+    """
+    try:
+        sessions = await mongodb_manager.get_user_sessions(user_id)
+        return sessions
+    except Exception as e:
+        print(f"Error getting user sessions from MongoDB: {e}")
+        return []
+
+
+async def get_session_info_mongodb(session_id: str) -> dict:
+    """
+    Lấy thông tin chi tiết của một session từ MongoDB.
+    
+    Args:
+        session_id: ID của session
+        
+    Returns:
+        dict: Thông tin session hoặc None
+    """
+    try:
+        session = await mongodb_manager.get_session_info(session_id)
+        return session
+    except Exception as e:
+        print(f"Error getting session info from MongoDB: {e}")
+        return None
+
+
+async def delete_session_mongodb(user_id: str, session_id: str) -> bool:
+    """
+    Xóa một session và toàn bộ history của nó từ MongoDB.
+    
+    Args:
+        user_id: ID của người dùng
+        session_id: ID của session cần xóa
+        
+    Returns:
+        bool: True nếu thành công, False nếu thất bại
+    """
+    try:
+        result = await mongodb_manager.delete_session(user_id, session_id)
+        return result
+    except Exception as e:
+        print(f"Error deleting session from MongoDB: {e}")
+        return False
+
+
+async def get_history_context_mongodb_v1(user_id: str, query: str, session_id: str, limit: int = 15) -> str:
+    """
+    Lấy context từ lịch sử chat trong MongoDB để phục vụ cho query hiện tại.
+    
+    Args:
+        user_id: ID của người dùng
+        query: Câu hỏi hiện tại
+        session_id: ID của session
+        limit: Số lượng lịch sử tối đa
+        
+    Returns:
+        str: Context string để gửi vào prompt
+    """
+    try:
+        # Lấy context từ MongoDB
+        history_context = await mongodb_manager.get_history_context(
+            user_id=user_id,
+            query=query,
+            session_id=session_id,
+            limit=limit
+        )
+        
+        # Lấy relevant memories nếu có
+        try:
+            relevant_memories = environment.memory.search(query=query, user_id=session_id, limit=5)
+            history_context_ = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
+            if history_context_:
+                history_context += "⚙️ Relevant Memories: " + str(history_context_)
+                print("⚙️ Relevant Memories: ", history_context_)
+        except Exception as e:
+            print("Error getting relevant memories: ", e)
+            
+        history_context = clean.clean_special_characters(history_context)
+        return history_context
+        
+    except Exception as e:
+        print("Lỗi khi lấy history context từ MongoDB: ", e)
+        return ""
 
 
 def get_history_context_v2(user_id, query, session_id):

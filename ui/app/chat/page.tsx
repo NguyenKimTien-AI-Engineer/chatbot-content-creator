@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, Smile, Paperclip } from "lucide-react";
+import { Send, Bot, Smile, Plus, Loader2, Paperclip } from "lucide-react";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import Image from "next/image";
 import { Header } from "@/components/layout/header";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { api } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
 
-type Role = "user" | "assistant" | "chart" | "reference";
+type Role = "user" | "assistant" | "chart" | "reference" | "image";
 
 interface ChatMessage {
   id: string;
@@ -24,6 +26,37 @@ function generateRandomHistoryId(length = 15) {
   let out = "";
   for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
+}
+
+function generateSecureToken(length = 32) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let token = "";
+  for (let i = 0; i < length; i++) {
+    token += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return token;
+}
+
+function getOrCreateAuthToken(): string {
+  let token = localStorage.getItem('auth_token');
+  if (!token) {
+    token = generateSecureToken();
+    localStorage.setItem('auth_token', token);
+  }
+  return token;
+}
+
+function getOrCreateDefaultSessionId(): string {
+  try {
+    let sid = localStorage.getItem('default_session_id');
+    if (!sid) {
+      sid = generateRandomHistoryId();
+      localStorage.setItem('default_session_id', sid);
+    }
+    return sid;
+  } catch {
+    return generateRandomHistoryId();
+  }
 }
 
 function fixLinksInHtml(rawHtml: string): string {
@@ -327,7 +360,7 @@ function getApiPaths(path: string) {
   let base = apiUrl;
   if (!base) {
     const host = process.env.NEXT_PUBLIC_SERVER_HOST || "localhost";
-    const port = process.env.NEXT_PUBLIC_API_PORT || "1953";
+    const port = process.env.NEXT_PUBLIC_API_PORT || "1979";
     base = `http://${host}:${port}`;
   }
   return {
@@ -501,25 +534,95 @@ async function streamChat(
 
 export default function ModernChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [convPage, setConvPage] = useState(1);
+  const convLimit = 50;
+  const [convHasMore, setConvHasMore] = useState(true);
+  const [convLoading, setConvLoading] = useState(false);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [systemInstructionUser, setSystemInstructionUser] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [refToggle, setRefToggle] = useState(false);
   const [sessionId, setSessionId] = useState("");
-  const [userId] = useState<string>("default");
+  const [userId, setUserId] = useState<string>("");
   const [pendingChart, setPendingChart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string>("");
+  const [attachedPreviews, setAttachedPreviews] = useState<string[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [imageAnalyses, setImageAnalyses] = useState<string[]>([]);
+  const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  const [isSavingHistory, setIsSavingHistory] = useState<boolean>(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const savedHistoryIdsRef = useRef<Set<string>>(new Set());
+  const MAX_SAVED_IDS = 1000; // Giới hạn số lượng ID đã lưu để tránh memory leak
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const searchParams = useSearchParams();
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const lastReferenceRef = useRef<any>(null);
+  const lastChartRef = useRef<any>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const saveChatHistory = async (userQuery: string, assistantAnswer: string, references?: any[], chart?: any, messageId?: string, imageUrl?: string | null) => {
+    try {
+      // Check if this message has already been saved
+      if (messageId && savedHistoryIdsRef.current.has(messageId)) {
+        console.log("History already saved for message:", messageId);
+        return;
+      }
+      
+      setIsSavingHistory(true);
+      setHistoryError(null);
+      
+      const historyData = {
+        user_id: userId,
+        session_id: sessionId,
+        query: userQuery,
+        answer: assistantAnswer,
+        reference: references || [],
+        chart: chart || null,
+        image_url: imageUrl || undefined,
+      };
+      
+      const response = await api.saveHistory(historyData);
+      
+      if (!response.success) {
+        throw new Error(response.message || "Không thể lưu lịch sử");
+      }
+      
+      console.log("Lịch sử đã được lưu thành công:", response.data.history_id);
+      
+      // Mark this message as saved
+      if (messageId) {
+        savedHistoryIdsRef.current.add(messageId);
+        
+        // Cleanup old IDs if we exceed the limit
+        if (savedHistoryIdsRef.current.size > MAX_SAVED_IDS) {
+          const idsArray = Array.from(savedHistoryIdsRef.current);
+          const idsToKeep = idsArray.slice(-MAX_SAVED_IDS / 2); // Keep the most recent half
+          savedHistoryIdsRef.current.clear();
+          idsToKeep.forEach(id => savedHistoryIdsRef.current.add(id));
+        }
+      }
+      
+    } catch (error) {
+      console.error("Lỗi khi lưu lịch sử:", error);
+      setHistoryError(error instanceof Error ? error.message : "Lỗi không xác định");
+      
+      // Hiển thị thông báo lỗi trong 5 giây
+      setTimeout(() => setHistoryError(null), 5000);
+    } finally {
+      setIsSavingHistory(false);
+    }
   };
 
   useEffect(() => {
@@ -527,8 +630,77 @@ export default function ModernChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!sessionId) setSessionId(generateRandomHistoryId());
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!sessionId) setSessionId(getOrCreateDefaultSessionId());
   }, [sessionId]);
+
+  useEffect(() => {
+    // Initialize user ID from auth token
+    const token = getOrCreateAuthToken();
+    setUserId(token);
+  }, []);
+
+  useEffect(() => {
+    const s = searchParams.get("session_id");
+    if (s) {
+      setSessionId(s);
+      setMessages([]);
+      loadConversation(s);
+    }
+  }, [searchParams]);
+
+  const loadConversation = async (sid: string) => {
+    try {
+      setConvLoading(true);
+      const res = await api.getHistory({ session_id: sid, page: 1, limit: convLimit });
+      const list = res?.data || [];
+      const rebuilt: ChatMessage[] = [];
+      for (const h of list) {
+        const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
+        const userContent = h.image_url ? { text: h.query, images: [h.image_url] } : h.query;
+        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: userContent, timestamp: t });
+        rebuilt.push({ id: `${h.history_id}-a`, role: "assistant", content: h.answer, timestamp: t });
+        if (h.reference && Array.isArray(h.reference) && h.reference.length > 0) {
+          rebuilt.push({ id: `${h.history_id}-r`, role: "reference", content: h.reference, timestamp: t });
+        }
+        if (h.chart) {
+          rebuilt.push({ id: `${h.history_id}-c`, role: "chart", content: h.chart, timestamp: t });
+        }
+      }
+      setMessages(rebuilt);
+      setConvPage(1);
+      setConvHasMore(list.length === convLimit);
+    } catch {} finally { setConvLoading(false); }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!sessionId || convLoading || !convHasMore) return;
+    try {
+      setConvLoading(true);
+      const nextPage = convPage + 1;
+      const res = await api.getHistory({ session_id: sessionId, page: nextPage, limit: convLimit });
+      const list = res?.data || [];
+      const rebuilt: ChatMessage[] = [];
+      for (const h of list) {
+        const t = new Date((h.timestamp as any) || (h.created_at as any) || Date.now()).getTime();
+        const userContent = h.image_url ? { text: h.query, images: [h.image_url] } : h.query;
+        rebuilt.push({ id: `${h.history_id}-u`, role: "user", content: userContent, timestamp: t });
+        rebuilt.push({ id: `${h.history_id}-a`, role: "assistant", content: h.answer, timestamp: t });
+        if (h.reference && Array.isArray(h.reference) && h.reference.length > 0) {
+          rebuilt.push({ id: `${h.history_id}-r`, role: "reference", content: h.reference, timestamp: t });
+        }
+        if (h.chart) {
+          rebuilt.push({ id: `${h.history_id}-c`, role: "chart", content: h.chart, timestamp: t });
+        }
+      }
+      setMessages((prev) => [...prev, ...rebuilt]);
+      setConvPage(nextPage);
+      setConvHasMore(list.length === convLimit);
+    } catch {} finally { setConvLoading(false); }
+  };
 
   useEffect(() => {
     if (uploadSuccess) {
@@ -545,13 +717,24 @@ export default function ModernChatPage() {
   }, [uploadError]);
 
   const handleSendMessage = async () => {
-    if (input.trim() === "") return;
+    if (input.trim() === "" && attachedFiles.length === 0) return;
 
     const now = Date.now();
+    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+    const localFiles = attachedFiles.slice(0, 2);
+    const localPreviews = attachedPreviews.slice(0, 2);
+    const localAnalyses = imageAnalyses.slice(0, 2);
+    const textToSend = input.trim() !== ""
+      ? input.trim()
+      : (localFiles.length >= 2 ? defaultTwo : defaultOne);
+    const contentToSend: any = localPreviews.length > 0
+      ? { text: textToSend, images: localPreviews }
+      : textToSend;
     const userMessage: ChatMessage = {
       id: now.toString(),
       role: "user",
-      content: input,
+      content: contentToSend,
       timestamp: now,
     };
 
@@ -560,24 +743,60 @@ export default function ModernChatPage() {
     setIsTyping(true);
     setPendingChart(false);
 
-    const queryLower = String(userMessage.content).toLowerCase();
+    setAttachedPreviews([]);
+    setAttachedFiles([]);
+    setImageAnalyses([]);
+    setShowPlusMenu(false);
+    setShowEmojiPicker(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
+    const queryLower = String(
+      typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || ""
+    ).toLowerCase();
     let chatbotType: ChatbotType = "reference";
     const chartKeywords = [
-      "phân tích", "so sánh", "phân loại", "thống kê", "biểu đồ", "vẽ", "chart", "draw",
+      "biểu đồ", "đồ thị", "chart", "plot", "graph", "vẽ", "draw", "visualize",
     ];
+    // Chỉ bật chế độ chart khi có từ khóa đặc thù của biểu đồ
     if (chartKeywords.some((kw) => queryLower.includes(kw))) {
       chatbotType = "chart";
+    }
+    // Nếu là tin nhắn mặc định khi có ảnh, không kích hoạt chart
+    if ((queryLower === defaultOne.toLowerCase() || queryLower === defaultTwo.toLowerCase()) && attachedFiles.length > 0) {
+      chatbotType = "reference";
+    }
+
+    // Đảm bảo có phân tích cho các ảnh đã đính kèm
+    const analyses: string[] = [...localAnalyses];
+    for (let i = 0; i < localFiles.length && i < 2; i++) {
+      if (!analyses[i]) {
+        const txt = await analyzeImageFile(localFiles[i]);
+        analyses[i] = txt || "";
+      }
+    }
+    setImageAnalyses(analyses);
+    const joinImageAnalyses = (arr: string[]) => arr.slice(0, 2).map((t, i) => `Ảnh ${i + 1}: ${t}`).join("\n\n");
+
+    let uploadedImageUrl: string | null = null;
+    if (localFiles.length > 0) {
+      try {
+        const resp = await api.uploadChatImage(localFiles[0], userId, sessionId);
+        uploadedImageUrl = resp?.data?.image_url || null;
+      } catch {}
     }
 
     const payload = {
       user_id: userId,
-      query: userMessage.content,
+      query: typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || "",
       collections: [DEFAULT_COLLECTION],
       session_id: sessionId,
       history_id: "",
       system_instruction_user: systemInstructionUser,
       include_products: true,
+      image_text: joinImageAnalyses(analyses),
     };
+
+    // Đã xóa preview/đính kèm ảnh khỏi khung nhập ngay sau khi gửi
 
     const assistantId = (Date.now() + 1).toString();
     assistantStreamingIdRef.current = assistantId;
@@ -616,12 +835,14 @@ export default function ModernChatPage() {
       (metadata) => {
         // Append reference or chart metadata entries
         if (metadata?.reference) {
+          lastReferenceRef.current = metadata.reference;
           setMessages((prev) => [
             ...prev,
             { id: `${Date.now()}-ref`, role: "reference", content: metadata.reference, timestamp: Date.now() },
           ]);
         }
         if (metadata?.chart) {
+          lastChartRef.current = metadata.chart;
           setMessages((prev) => [
             ...prev,
             { id: `${Date.now()}-chartmeta`, role: "chart", content: metadata.chart, timestamp: Date.now() },
@@ -641,17 +862,87 @@ export default function ModernChatPage() {
     }
 
     setIsTyping(false);
+
+    // Lưu lịch sử chat sau khi hoàn thành
+    if (fullAnswer.trim()) {
+      const userQuery = typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || "";
+      const messageId = `history-${userMessage.id}`; // Unique ID for this history entry
+      
+      // Kiểm tra xem lịch sử đã được lưu chưa để tránh trùng lặp
+      if (savedHistoryIdsRef.current.has(messageId)) {
+        console.log("History already saved for message:", messageId);
+        return;
+      }
+      
+      // Lấy references và charts từ messages hiện tại
+      const references = lastReferenceRef.current || undefined;
+      const chart = lastChartRef.current || undefined;
+      
+      // Lưu lịch sử với delay nhỏ để đảm bảo messages đã được cập nhật
+      setTimeout(() => {
+        saveChatHistory(userQuery, fullAnswer, references, chart, messageId, uploadedImageUrl);
+      }, 100);
+    }
   };
 
   const handleAttachClick = () => {
     fileInputRef.current?.click();
+    setShowPlusMenu(false);
+  };
+
+  const analyzeImageFile = async (imageFile: File): Promise<string> => {
+    try {
+      const form = new FormData();
+      form.append("file", imageFile);
+      const paths = getApiPaths("/api/v1/analyze-image");
+      let res: Response | null = null;
+      try {
+        res = await fetch(paths.relative, { method: "POST", body: form });
+      } catch (err) {
+        if (paths.absolute) {
+          res = await fetch(paths.absolute, { method: "POST", body: form });
+        } else {
+          throw err;
+        }
+      }
+      if (res && res.ok) {
+        const data = await res.json();
+        return String(data?.data?.image_text || "");
+      }
+      return "";
+    } catch {
+      return "";
+    }
   };
 
   const handleFileSelected = async (e: any) => {
-    const file = e?.target?.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
+    const files: File[] = Array.from(e?.target?.files || []);
+    if (!files.length) return;
     setUploadError(null);
+
+    // Ảnh: thêm vào danh sách đính kèm, tối đa 2 ảnh
+    const imageFiles = files.filter((f) => f.type?.startsWith("image/"));
+    if (imageFiles.length > 0) {
+      try {
+        for (const file of imageFiles) {
+          if (attachedFiles.length >= 2) break;
+          const url = URL.createObjectURL(file);
+          setAttachedPreviews((prev) => (prev.length < 2 ? [...prev, url] : prev));
+          setAttachedFiles((prev) => (prev.length < 2 ? [...prev, file] : prev));
+          const analysis = await analyzeImageFile(file);
+          setImageAnalyses((prev) => (prev.length < 2 ? [...prev, analysis] : prev));
+        }
+      } catch (err: any) {
+        setUploadError(String(err?.message || err));
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    // File không phải ảnh: quy trình upload bình thường
+    const file = files[0];
+    setIsUploading(true);
     try {
       const form = new FormData();
       form.append("user_id", userId || "default");
@@ -697,6 +988,28 @@ export default function ModernChatPage() {
     }
   };
 
+  const handlePaste = async (e: any) => {
+    try {
+      const items = e.clipboardData?.items || [];
+      for (let i = 0; i < items.length; i++) {
+        if (attachedFiles.length >= 2) break;
+        const it = items[i];
+        if (it && it.type && it.type.startsWith("image/")) {
+          const blob = it.getAsFile();
+          if (!blob) continue;
+          const file = new File([blob], `pasted-${Date.now()}.png`, { type: blob.type || "image/png" });
+          const url = URL.createObjectURL(blob);
+          setAttachedPreviews((prev) => (prev.length < 2 ? [...prev, url] : prev));
+          setAttachedFiles((prev) => (prev.length < 2 ? [...prev, file] : prev));
+          const analysis = await analyzeImageFile(file);
+          setImageAnalyses((prev) => (prev.length < 2 ? [...prev, analysis] : prev));
+        }
+      }
+    } catch (err) {
+      console.warn("Paste image failed", err);
+    }
+  };
+
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString("vi-VN", {
       hour: "2-digit",
@@ -716,45 +1029,126 @@ export default function ModernChatPage() {
 
           {/* Messages / Empty State */}
           {messages.length === 0 ? (
+            convLoading ? (
+              <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
+                <Loader2 className="w-6 h-6 text-gray-500 animate-spin" />
+              </main>
+            ) : (
             <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
               <div className="max-w-2xl w-full mx-auto flex flex-col items-center">
                 <h1 className="text-5xl font-semibold tracking-tight text-gray-900 mb-6 select-none">MEKONGAI</h1>
-                <div className="relative flex items-center gap-2 w-full">
-                  <div className="relative flex-1">
+                <div className="flex items-center gap-2 w-full">
+                  <div className="flex-1">
                     <input
                       ref={fileInputRef}
                       type="file"
+                      multiple
                       className="hidden"
                       onChange={handleFileSelected}
                     />
-                    <input
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                      placeholder="Bạn muốn biết điều gì?"
-                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                    />
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    {attachedPreviews.length > 0 && (
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {attachedPreviews.slice(0, 2).map((src, idx) => (
+                          <div key={idx} className="inline-block relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={src}
+                              alt={`attachment-preview-${idx}`}
+                              className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
+                            />
+                            <button
+                              onClick={() => {
+                                try { URL.revokeObjectURL(src); } catch { /* noop */ }
+                                setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
+                                setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+                                setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
+                              }}
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
+                              title="Xóa ảnh"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <input
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onPaste={handlePaste}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                        placeholder="Bạn muốn biết điều gì?"
+                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowPlusMenu((s) => !s)}
+                            disabled={isUploading}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title={isUploading ? "Đang tải..." : "Thêm"}
+                          >
+                            <Plus className="w-5 h-5 text-gray-400" />
+                          </button>
+
+                          {showPlusMenu && (
+                            <div
+                              className="
+                                absolute z-10 
+                                bottom-full mb-2
+                                w-56 rounded-xl 
+                                border border-gray-200 
+                                bg-white shadow-md p-2
+                              "
+                            >
+                              <button
+                                onClick={handleAttachClick}
+                                className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                              >
+                                <Paperclip className="w-4 h-4 text-gray-500" />
+                                Add photos & files
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <button
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            onClick={() => setShowEmojiPicker((s) => !s)}
+                            title="Chèn biểu tượng cảm xúc"
+                          >
+                            <Smile className="w-5 h-5 text-gray-400" />
+                          </button>
+                          {showEmojiPicker && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
+                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
+                                <button
+                                  key={emo}
+                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
+                                  onClick={() => {
+                                    const base = input.trim();
+                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
+                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
+                                    setShowEmojiPicker(false);
+                                  }}
+                                >{emo}</button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       <button
-                        onClick={handleAttachClick}
-                        disabled={isUploading}
-                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                        onClick={handleSendMessage}
+                        disabled={!input.trim() && attachedFiles.length === 0}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                       >
-                        <Paperclip className="w-5 h-5 text-gray-400" />
-                      </button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                        <Smile className="w-5 h-5 text-gray-400" />
+                        <Send className="w-5 h-5" />
                       </button>
                     </div>
-                    <button
-                      onClick={handleSendMessage}
-                      disabled={!input.trim()}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-5 h-5" />
-                    </button>
                   </div>
                   
                 </div>
@@ -767,11 +1161,18 @@ export default function ModernChatPage() {
                 {uploadError && (
                   <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">{uploadError}</p>
                 )}
+                {historyError && (
+                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
+                {historyError && (
+                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
                 <p className="text-xs text-gray-400 text-center mt-3">
                   AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
                 </p>
               </div>
             </main>
+            )
           ) : (
           <main className="flex-1 overflow-y-auto px-4 md:px-6 py-6 bg-gray-50">
             <div className="max-w-4xl mx-auto space-y-6">
@@ -785,6 +1186,17 @@ export default function ModernChatPage() {
                 />
               </div> */}
 
+              {convHasMore && (
+                <div className="flex items-center justify-center">
+                  <button
+                    onClick={loadOlderMessages}
+                    disabled={convLoading}
+                    className="px-3 py-1.5 text-xs rounded border hover:bg-gray-50"
+                  >
+                    {convLoading ? "Đang tải tin nhắn cũ…" : "Tải thêm tin nhắn cũ"}
+                  </button>
+                </div>
+              )}
               {messages.filter((m) => !(m.role === "reference" && !refToggle)).map((message, index) => (
                 <div
                   key={message.id}
@@ -798,13 +1210,13 @@ export default function ModernChatPage() {
                       message.role === "user" ? "bg-white border border-gray-200" : "bg-black"
                     }`}
                   >
-                    {message.role === "user" ? (
+                    {(message.role === "user" || message.role === "image") ? (
                       <Image src="/OIP.webp" alt="KAT" width={20} height={20} className="rounded-sm object-contain" />
                     ) : (
                       <Bot className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <div className={`flex flex-col gap-1 max-w-[70%] ${message.role === "user" ? "items-end" : "items-start"}`}>
+                  <div className={`flex flex-col gap-1 max-w-[70%] ${(message.role === "user" || message.role === "image") ? "items-end" : "items-start"}`}>
                     {message.role === "reference" ? (
                       refToggle ? (
                         <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
@@ -830,12 +1242,36 @@ export default function ModernChatPage() {
                       <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
                         <div dangerouslySetInnerHTML={{ __html: String(message.content) }} />
                       </div>
+                    ) : message.role === "image" ? (
+                      <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={String(message.content)} alt="uploaded" className="max-w-full rounded-xl border border-gray-200" />
+                      </div>
                     ) : (
                       <div className={`rounded-2xl px-4 py-3 shadow-sm ${message.role === "user" ? "bg-white border border-gray-200 text-gray-800 rounded-tr-md" : "bg-white border border-gray-200 text-gray-800 rounded-tl-md"}`}>
                         {message.role === "assistant" ? (
                           <div className="text-sm leading-relaxed prose max-w-none" dangerouslySetInnerHTML={{ __html: formatAssistantHtml(String(message.content || "")) }} />
                         ) : (
-                          <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                          typeof message.content === "string" ? (
+                            <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              {Array.isArray(message.content?.images) && message.content.images.length > 0 && (
+                                <div className="flex flex-wrap gap-2">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  {message.content.images.map((src: string, idx: number) => (
+                                    <img
+                                      key={idx}
+                                      src={src}
+                                      alt={`attachment-${idx}`}
+                                      className="w-36 h-36 rounded-xl object-cover border border-gray-200"
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                              <p className="text-sm leading-relaxed">{String(message.content?.text || "")}</p>
+                            </div>
+                          )
                         )}
                       </div>
                     )}
@@ -902,42 +1338,121 @@ export default function ModernChatPage() {
                 {uploadError && (
                   <p className="text-xs text-red-600 mt-2" aria-live="polite">{uploadError}</p>
                 )}
-                <div className="relative flex items-center gap-2">
-                  <div className="relative flex-1">
+                {historyError && (
+                  <p className="text-xs text-red-600 mt-2" aria-live="polite">Lỗi lưu lịch sử: {historyError}</p>
+                )}
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
                     <input
                       ref={fileInputRef}
                       type="file"
+                      multiple
                       className="hidden"
                       onChange={handleFileSelected}
                     />
-                    <input
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                      placeholder="Nhập tin nhắn của bạn..."
-                      className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                    />
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    {attachedPreviews.length > 0 && (
+                      <div className="mb-3 flex flex-wrap gap-2">
+                        {attachedPreviews.slice(0, 2).map((src, idx) => (
+                          <div key={idx} className="inline-block relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={src}
+                              alt={`attachment-preview-${idx}`}
+                              className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
+                            />
+                            <button
+                              onClick={() => {
+                                try { URL.revokeObjectURL(src); } catch { /* noop */ }
+                                setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
+                                setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+                                setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
+                              }}
+                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
+                              title="Xóa ảnh"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <input
+                        ref={inputRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onPaste={handlePaste}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                        placeholder="Nhập tin nhắn của bạn..."
+                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                        <div className="relative">
+                          <button
+                            onClick={() => setShowPlusMenu((s) => !s)}
+                            disabled={isUploading}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title={isUploading ? "Đang tải..." : "Thêm"}
+                          >
+                            <Plus className="w-5 h-5 text-gray-400" />
+                          </button>
+
+                          {showPlusMenu && (
+                            <div
+                              className="
+                                absolute z-10 
+                                bottom-full mb-2
+                                w-56 rounded-xl 
+                                border border-gray-200 
+                                bg-white shadow-md p-2
+                              "
+                            >
+                              <button
+                                onClick={handleAttachClick}
+                                className="w-full flex items-center gap-2 text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                              >
+                                <Paperclip className="w-4 h-4 text-gray-500" />
+                                Add photos & files
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <button
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            onClick={() => setShowEmojiPicker((s) => !s)}
+                            title="Chèn biểu tượng cảm xúc"
+                          >
+                            <Smile className="w-5 h-5 text-gray-400" />
+                          </button>
+                          {showEmojiPicker && (
+                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
+                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
+                                <button
+                                  key={emo}
+                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
+                                  onClick={() => {
+                                    const base = input.trim();
+                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
+                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
+                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
+                                    setShowEmojiPicker(false);
+                                  }}
+                                >{emo}</button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       <button
-                        onClick={handleAttachClick}
-                        disabled={isUploading}
-                        className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                        title={isUploading ? "Đang tải..." : "Đính kèm tài liệu"}
+                        onClick={handleSendMessage}
+                        disabled={!input.trim() && attachedFiles.length === 0}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                       >
-                        <Paperclip className="w-5 h-5 text-gray-400" />
-                      </button>
-                      <button className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                        <Smile className="w-5 h-5 text-gray-400" />
+                        <Send className="w-5 h-5" />
                       </button>
                     </div>
-                    <button
-                      onClick={handleSendMessage}
-                      disabled={!input.trim()}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-5 h-5" />
-                    </button>
                   </div>
                   
                 </div>

@@ -17,6 +17,12 @@ Lấy 3 ý quan trọng nhất/nổi bật nhất của sản phẩm để viế
 
 ---
 
+<|Thông tin phân tích hình ảnh sản phẩm từ hình ảnh người dùng tải lên "Nếu có"|>:
+**Luôn luôn sử dụng thông tin hình ảnh đã được phân tích mới nhất bên dưới. Tuyệt đối không sử dụng lại thông tin từ hình ảnh sản phẩm cũ để trả lời cho hình ảnh tiếp theo.** 
+{image_text}
+
+---
+
 <|Template bài viết mẫu|>:
 {template}
 
@@ -59,15 +65,14 @@ Không hỏi lại những ý định đã có trong lịch sử hoặc thông t
 
 ---
 
+{context}
+
+---
+
 <|Things to avoid - (Những điều cần tránh)|>:
 - Tránh hỏi lại những thông tin đã được cung cấp trong `History`.
 - Tránh nhắc đến việc bạn nhận được thông tin từ ngữ cảnh `Context`.
 - Tránh nhầm lẫn giữa bản thân bạn và người dùng.
-
----
-
-<|Context - (Thông tin tham khảo)|>:
-{context}
 
 ---
 

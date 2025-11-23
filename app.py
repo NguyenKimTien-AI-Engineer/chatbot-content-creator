@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import warnings
 import uvicorn
 
-from api import chatbot, document, history, products
+from api import chatbot, document, history, products, image
 
 warnings.filterwarnings("ignore", message="Api key is used with an insecure connection.")
 
@@ -21,6 +21,7 @@ app.include_router(chatbot.router, prefix="/api")
 app.include_router(document.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(products.router, prefix="/api")
+app.include_router(image.router, prefix="/api")
 
 
 @app.get("/")
@@ -31,4 +32,4 @@ async def hello():
 # ================================================ MAIN API ===================================================
 ###############################################################################################################
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=1953, timeout_keep_alive=50000)
+    uvicorn.run(app, host="0.0.0.0", port=1979, timeout_keep_alive=50000)

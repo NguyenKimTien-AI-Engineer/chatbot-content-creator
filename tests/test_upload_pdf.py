@@ -12,7 +12,7 @@ async def test_upload_pdf_to_qdrant():
     """
     
     # API endpoint
-    api_url = "http://localhost:1953/api/v1/upload-files"
+    api_url = "http://localhost:1979/api/v1/upload-files"
     
     # Path to the PDF file
     pdf_path = Path("d:/Document/Python_project/mekongai-content-creator/Fanpage Content Agent Prompts Configuration.pdf")
@@ -74,7 +74,7 @@ async def test_upload_with_custom_collection_name():
     await test_upload_pdf_to_qdrant()
     
     # Sau đó có thể sử dụng endpoint save collection để lưu với tên tùy chỉnh
-    api_save_collection = "http://localhost:1953/api/v1/qdrant/collections/user"
+    api_save_collection = "http://localhost:1979/api/v1/qdrant/collections/user"
     
     collection_data = {
         "user_id": "test_user_001",
@@ -109,7 +109,7 @@ async def test_get_user_collections():
     Test lấy danh sách collections của user để kiểm tra.
     """
     
-    api_get_collections = "http://localhost:1953/api/v1/qdrant/collections/user/test_user_001"
+    api_get_collections = "http://localhost:1979/api/v1/qdrant/collections/user/test_user_001"
     
     try:
         print(f"\n📋 Đang lấy danh sách collections...")

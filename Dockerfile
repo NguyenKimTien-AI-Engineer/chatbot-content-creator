@@ -52,4 +52,4 @@ RUN mkdir -p /app/nltk_data && \
 
 # 11) Expose port và khởi động
 EXPOSE 8066
-CMD ["./venv/bin/python3.10", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "1953"]
+CMD ["./venv/bin/python3.10", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "1979"]

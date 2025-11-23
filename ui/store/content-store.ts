@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
-import { ContentHistoryItem, ContentHistoryDetail } from '@/lib/api';
+import { ContentHistoryItem, ContentHistoryDetail, SessionInfo } from '@/lib/api';
 
 export interface ContentFormData {
   business_name: string;
@@ -82,6 +82,22 @@ interface ContentState {
   templates: any[];
   setTemplates: (templates: any[]) => void;
 
+  historySessions: SessionInfo[];
+  setHistorySessions: (sessions: SessionInfo[]) => void;
+  historyPreviews: Record<string, string>;
+  setHistoryPreviews: (previews: Record<string, string>) => void;
+  mergeHistoryPreviews: (previews: Record<string, string>) => void;
+  historyHasLoaded: boolean;
+  setHistoryHasLoaded: (loaded: boolean) => void;
+  historyHasMore: boolean;
+  setHistoryHasMore: (hasMore: boolean) => void;
+  historySkip: number;
+  setHistorySkip: (skip: number) => void;
+  historyLimit: number;
+  setHistoryLimit: (limit: number) => void;
+  historyLoading: boolean;
+  setHistoryLoading: (loading: boolean) => void;
+
   // UI states
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -153,6 +169,23 @@ export const useContentStore = create<ContentState>()(
         templates: [],
         setTemplates: (templates) => set({ templates }),
 
+        historySessions: [],
+        setHistorySessions: (sessions) => set({ historySessions: sessions }),
+        historyPreviews: {},
+        setHistoryPreviews: (previews) => set({ historyPreviews: previews }),
+        mergeHistoryPreviews: (previews) =>
+          set((state) => ({ historyPreviews: { ...state.historyPreviews, ...previews } })),
+        historyHasLoaded: false,
+        setHistoryHasLoaded: (loaded) => set({ historyHasLoaded: loaded }),
+        historyHasMore: true,
+        setHistoryHasMore: (hasMore) => set({ historyHasMore: hasMore }),
+        historySkip: 0,
+        setHistorySkip: (skip) => set({ historySkip: skip }),
+        historyLimit: 20,
+        setHistoryLimit: (limit) => set({ historyLimit: limit }),
+        historyLoading: false,
+        setHistoryLoading: (loading) => set({ historyLoading: loading }),
+
         // UI states
         activeTab: 'post',
         setActiveTab: (tab) => set({ activeTab: tab }),
@@ -163,6 +196,12 @@ export const useContentStore = create<ContentState>()(
           savedContentHistory: state.savedContentHistory,
           isHistoryLoaded: state.isHistoryLoaded,
           lastHistoryFetch: state.lastHistoryFetch,
+          historySessions: state.historySessions,
+          historyPreviews: state.historyPreviews,
+          historyHasLoaded: state.historyHasLoaded,
+          historyHasMore: state.historyHasMore,
+          historySkip: state.historySkip,
+          historyLimit: state.historyLimit,
         }),
       }
     ),

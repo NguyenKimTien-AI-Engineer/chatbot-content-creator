@@ -1,12 +1,17 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 import asyncio
 import re
-from typing import Union, List, Dict, Any
+import uuid
+import base64
+from typing import Union, List, Dict, Any, Optional
 
 from bot.v1 import bot_suggestion, chatbot_custom_prompt
+from controllers.databases.nosql.mongodb import get_mongodb_manager
+from api.image import _analyze_image_bytes
+from controllers.aws.connect_s3 import S3Service
 
 router = APIRouter()
 
@@ -62,6 +67,7 @@ class ChatbotCustomPromptRequest(BaseModel):
     history_id: Union[str, int, List[Any], Dict[str, Any]] = ""
     system_instruction_user: Union[str, int, List[Any], Dict[str, Any]] = ""
     include_products: bool = True
+    image_text: Union[str, int, List[Any], Dict[str, Any]] = ""
 
 
 class ChartRequest(BaseModel):
@@ -146,7 +152,15 @@ async def chatbot_basic_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -257,7 +271,15 @@ async def chatbot_reference_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -310,7 +332,15 @@ async def chatbot_chart_stream_endpoint(request: ChatbotRequest):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -384,6 +414,7 @@ async def chatbot_custom_prompt_endpoint(request: ChatbotCustomPromptRequest):
             request.history_id,
             request.system_instruction_user,
             request.include_products,
+            str(request.image_text or ""),
         )
 
         content = {"status": 200, "message": "success", "data": {"answer": answer, "reference": references}}
@@ -412,10 +443,101 @@ async def chatbot_custom_prompt_stream_endpoint(request: ChatbotCustomPromptRequ
             request.history_id,
             request.system_instruction_user,
             request.include_products,
+            str(request.image_text or ""),
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
+    except Exception as e:
+        content = {"status": 400, "message": "Error: " + str(e)}
+        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+
+
+@router.post("/v1/chatbot-with-image")
+@router.post("/v1/chatbot-with-image/")
+async def chatbot_with_image_endpoint(
+    user_id: str = Form(...),
+    query: str = Form(...),
+    collections: str = Form("[]"),
+    session_id: str = Form(""),
+    history_id: str = Form(""),
+    system_instruction_user: str = Form(""),
+    include_products: bool = Form(True),
+    image: UploadFile = File(...)
+):
+    """
+    Chatbot endpoint với hỗ trợ upload ảnh.
+    Ảnh sẽ được phân tích và kết quả được thêm vào prompt.
+    """
+    try:
+        # Validate image file
+        if not image.content_type or not image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File phải là ảnh")
+        
+        # Read image data
+        image_bytes = await image.read()
+        if len(image_bytes) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=400, detail="Kích thước ảnh không được vượt quá 10MB")
+        
+        # Analyze image
+        image_analysis = await _analyze_image_bytes(image_bytes, image.content_type)
+        
+        # Upload image to S3
+        s3 = S3Service()
+        document_id = session_id.strip() or str(uuid.uuid4())
+        image_url = await s3.upload_image(
+            image_data=image_bytes,
+            file_name=image.filename or "image",
+            user_id=user_id,
+            document_id=document_id,
+            image_index=0,
+            content_type=image.content_type or "image/jpeg",
+        )
+        
+        # Combine query with image analysis
+        enhanced_query = f"{query}\n\n[Phân tích ảnh]: {image_analysis}"
+        
+        # Process with chatbot
+        loop = asyncio.get_event_loop()
+        
+        print(f"User: {user_id}, Query: {enhanced_query}, Collections: {collections}")
+        
+        answer, references = await loop.run_in_executor(
+            None,
+            chatbot_custom_prompt.chatbot_custom_prompt,
+            re.sub(r"\s+", "", user_id),
+            enhanced_query,
+            collections,
+            session_id,
+            history_id,
+            system_instruction_user,
+            include_products,
+            "",  # image_text is empty since we processed the image
+        )
+        
+        # Return response with image reference
+        content = {
+            "status": 200, 
+            "message": "success", 
+            "data": {
+                "answer": answer, 
+                "reference": references,
+                "image_url": image_url,
+                "image_analysis": image_analysis
+            }
+        }
+        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+        
+    except HTTPException:
+        raise
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
         return JSONResponse(content=jsonable_encoder(content), status_code=400)
@@ -465,7 +587,15 @@ async def agent_province_merger_stream_endpoint(request: AgentProvinceMerger):
             request.history_id,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}
@@ -490,7 +620,15 @@ async def agent_kat_stream_endpoint(request: AgentKAT):
             request.prompt,
         )
 
-        return StreamingResponse(answer, media_type="text/event-stream")
+        return StreamingResponse(
+            answer,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         content = {"status": 400, "message": "Error: " + str(e)}

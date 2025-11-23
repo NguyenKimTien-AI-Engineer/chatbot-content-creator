@@ -42,7 +42,8 @@ config = {
 }
 
 # memory = Memory.from_config(config)
-memory = Memory()
+# memory = Memory()  # Temporarily disabled due to Qdrant lock issue
+memory = None  # Placeholder for now
 
 # ================================================
 translator = GoogleTranslator(source='auto', target='en')

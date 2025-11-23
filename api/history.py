@@ -1,323 +1,749 @@
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
-import asyncio
-import os
-from typing import Union, List, Dict, Any, Optional
+"""
+History API router cho Agent Content Generator.
 
-from controllers.data import history
-from configs import constant
+Cung cấp CRUD operations cho history management với MongoDB.
+"""
+
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta
+from fastapi import APIRouter, HTTPException, Query, Depends, status, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field
+from collections import defaultdict
+import time
+import uuid
+
 from controllers.databases.nosql.mongodb import get_mongodb_manager, MongoDBManager
-from datetime import datetime
 
 router = APIRouter()
 
+active_ws_connections: Dict[str, List[WebSocket]] = defaultdict(list)
 
-class History(BaseModel):
-    user_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    session_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    history_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-
-
-# Get user history
-@router.post("/v1/history")
-@router.post("/v1/history/")
-async def get_user_history_endpoint(request: History):
-    print("| Get User History API")
-    try:
-        files_path = f"{constant.DATA_HISTORY}/{request.user_id}"
-        print(f"Files path: {files_path}")
-
-        user_histories = []
-
-        if os.path.exists(files_path):
-            print(f"Files path exists: {files_path}")
-            try:
-                loop = asyncio.get_event_loop()
-                his = await loop.run_in_executor(
-                    None, history.get_all_history_user, request.user_id
-                )
-                user_histories = his
-            except Exception as e:
-                content = {"status": 400, "message": "fail", "error": str(e)}
-                return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-        if request.history_id:
-            print(f"History ID: {request.history_id}")
-            print(user_histories)
-            try:
-                final_user_histories = [item for item in user_histories if any(
-                    item.get("history_id") == request.history_id
-                )]
-            except Exception as e:
-                final_user_histories = [
-                    entry
-                    for sublist in user_histories
-                    for entry in sublist
-                    if entry.get("history_id") == request.history_id
-                ]
-
-        elif request.session_id:
-            print(f"Session ID: {request.session_id}")
-            his = history.get_history(request.user_id, request.session_id)
-            final_user_histories = his
-        else:
-            print("No session ID or history ID provided.")
-            final_user_histories = user_histories
-
-        content = {
-            "status": 200,
-            "data": final_user_histories,
-            "message": "success"
-        }
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
-
-    except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-
-# Update feedback for chat history
-class FeedbackUpdate(BaseModel):
-    user_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    session_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    history_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    new_feedback: Union[str, int, List[Any], Dict[str, Any]] = ""
-    new_feedback_status: Union[str, int, List[Any], Dict[str, Any]] = ""
-
-
-@router.post("/v1/update-feedback-history")
-@router.post("/v1/update-feedback-history/")
-async def update_feedback_endpoint(request: FeedbackUpdate):
-    print("| Update Feedback API")
-    try:
+async def broadcast_session_update(user_id: str, payload: Dict[str, Any]) -> None:
+    conns = active_ws_connections.get(user_id, [])
+    if not conns:
+        return
+    data = {"type": "session_update", **payload}
+    living: List[WebSocket] = []
+    for ws in conns:
         try:
-            loop = asyncio.get_event_loop()
-            user_histories, _data = await loop.run_in_executor(
-                None, history.update_feedback, request.user_id, request.history_id, request.new_feedback, request.new_feedback_status, request.session_id
-            )
-        except Exception as e:
-            content = {"status": 400, "message": "Feedback updated fail: " + str(e)}
-            return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-        if user_histories:
-            content = {
-                "status": 200,
-                "data": _data,
-                "message": "Feedback updated successfully",
-            }
-            return JSONResponse(content=jsonable_encoder(content), status_code=200)
-
-        else:
-            content = {"status": 400, "message": "History not found."}
-            return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-    except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-
-# Delete chat history
-class DeleteHistories(BaseModel):
-    user_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-    session_id: Union[str, int, List[Any], Dict[str, Any]] = ""
-
-
-@router.post("/v1/delete-history")
-@router.post("/v1/delete-history/")
-async def delete_history_endpoint(request: DeleteHistories):
-    print("| Delete History API")
-    try:
-        path_json = f"{constant.DATA_HISTORY}/{request.user_id}/{request.session_id}.json"
-
-        if os.path.exists(path_json):
+            await ws.send_json(data)
+            living.append(ws)
+        except Exception:
             try:
-                os.remove(path_json)
-                content = {"status": 200, "message": "success"}
-                return JSONResponse(content=jsonable_encoder(content), status_code=200)
-            except Exception as e:
-                content = {"status": 500, "message": f"Error deleting files: {str(e)}"}
-                return JSONResponse(content=jsonable_encoder(content), status_code=500)
+                await ws.close()
+            except Exception:
+                pass
+    active_ws_connections[user_id] = living
+
+# Rate limiting storage - in production, use Redis or similar
+rate_limit_storage: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_REQUESTS = 100  # Maximum requests per window
+RATE_LIMIT_WINDOW = 60  # Time window in seconds
+
+
+def check_rate_limit(user_id: str) -> bool:
+    """
+    Kiểm tra rate limit cho user.
+    
+    Args:
+        user_id: ID của user
+        
+    Returns:
+        bool: True nếu trong giới hạn, False nếu vượt quá
+    """
+    current_time = time.time()
+    
+    # Get requests for this user
+    user_requests = rate_limit_storage[user_id]
+    
+    # Remove requests outside the time window
+    user_requests[:] = [req_time for req_time in user_requests if current_time - req_time < RATE_LIMIT_WINDOW]
+    
+    # Check if limit exceeded
+    if len(user_requests) >= RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Add current request
+    user_requests.append(current_time)
+    return True
+
+
+def convert_references_to_schema(references: Optional[List]) -> Optional[List[Dict[str, str]]]:
+    """
+    Chuyển đổi references sang schema chuẩn với đầy đủ thông tin.
+    
+    Args:
+        references: Danh sách references (có thể là schema cũ hoặc mới)
+        
+    Returns:
+        List[Dict]: Danh sách references theo schema chuẩn
+    """
+    if not references:
+        return None
+    
+    converted_references = []
+    
+    for ref in references:
+        if isinstance(ref, dict):
+            # Nếu đã là schema mới với đầy đủ trường
+            if all(key in ref for key in ['doc_id', 'title', 'source', 'excerpt']):
+                converted_references.append(ref)
+            # Nếu là schema cũ (chỉ có title và content)
+            elif 'title' in ref and 'content' in ref:
+                converted_references.append({
+                    "doc_id": str(uuid.uuid4()),  # Tạo ID mới
+                    "title": ref['title'],
+                    "source": ref.get('source', 'unknown'),  # Mặc định nếu không có
+                    "excerpt": ref['content']
+                })
+            # Nếu chỉ có title
+            elif 'title' in ref:
+                converted_references.append({
+                    "doc_id": str(uuid.uuid4()),
+                    "title": ref['title'],
+                    "source": ref.get('source', 'unknown'),
+                    "excerpt": ref.get('content', ref.get('excerpt', ''))
+                })
+            else:
+                # Nếu không có cấu trúc rõ ràng, tạo từ dict
+                converted_references.append({
+                    "doc_id": str(uuid.uuid4()),
+                    "title": ref.get('title', 'Tài liệu tham khảo'),
+                    "source": ref.get('source', 'unknown'),
+                    "excerpt": ref.get('content', ref.get('excerpt', str(ref)))
+                })
         else:
-            content = {"status": 400, "message": "fail"}
-            return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-    except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
-
-
-# =========================
-# MongoDB Chat Histories API
-# =========================
-
-class MessageItem(BaseModel):
-    role: str
-    content: Union[str, Dict[str, Any]]
-    metadata: Optional[Dict[str, Any]] = None
-    timestamp: Optional[Any] = None
-
-class SenderInfo(BaseModel):
-    name: Optional[str] = None
-    profile_pic: Optional[str] = None
-    gender: Optional[str] = None
-    id: Optional[str] = None
-    status: Optional[int] = None
-    message: Optional[str] = None
+            # Nếu không phải dict, chuyển đổi sang string
+            converted_references.append({
+                "doc_id": str(uuid.uuid4()),
+                "title": "Tài liệu tham khảo",
+                "source": "unknown",
+                "excerpt": str(ref)
+            })
+    
+    return converted_references if converted_references else None
 
 
-class CreateConversationRequest(BaseModel):
-    conversation_id: str
-    user_id: Optional[str] = None
-    first_message: Optional[MessageItem] = None
-    messages: Optional[List[MessageItem]] = None
-    updated_at: Optional[Any] = None
-    metadata: Optional[Dict[str, Any]] = None
-    # Extended fields aligned with json_history.json
-    history_id: Optional[Union[str, int]] = None
-    session_id: Optional[Union[str, int]] = None
-    status: Optional[str] = "active"
-    query: Optional[Union[str, int]] = None
-    answer: Optional[Any] = None
-    answer_segments: Optional[List[Dict[str, Any]]] = None
-    media: Optional[Dict[str, Any]] = None
-    company_id: Optional[str] = None
-    customer_id: Optional[str] = None
-    sender_info: Optional[SenderInfo] = None
-    bot_id: Optional[str] = None
-    social_id: Optional[str] = None
-    social_page_id: Optional[str] = None
-    social_access_link: Optional[str] = None
-    created_at: Optional[Any] = None
+def get_rate_limit_info(user_id: str) -> Dict[str, any]:
+    """
+    Get rate limit information for user.
+    
+    Args:
+        user_id: ID của user
+        
+    Returns:
+        Dict: Thông tin rate limit
+    """
+    current_time = time.time()
+    user_requests = rate_limit_storage[user_id]
+    
+    # Remove old requests
+    user_requests[:] = [req_time for req_time in user_requests if current_time - req_time < RATE_LIMIT_WINDOW]
+    
+    return {
+        "limit": RATE_LIMIT_REQUESTS,
+        "window": RATE_LIMIT_WINDOW,
+        "current": len(user_requests),
+        "remaining": max(0, RATE_LIMIT_REQUESTS - len(user_requests))
+    }
 
 
-class AppendMessageRequest(BaseModel):
-    conversation_id: str
-    message: MessageItem
+class ReferenceItem(BaseModel):
+    doc_id: str = Field(...)
+    title: str = Field(...)
+    source: str = Field(...)
+    excerpt: str = Field(...)
 
 
-class GetConversationRequest(BaseModel):
-    conversation_id: str
+class HistoryCreateRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=100)
+    session_id: Optional[str] = Field(default="", max_length=100)
+    query: str = Field(..., min_length=1, max_length=5000)
+    answer: str = Field(..., min_length=1, max_length=10000)
+    feedback: Optional[str] = Field(default="", max_length=1000)
+    feedback_status: Optional[str] = Field(default="", max_length=50)
+    reference: Optional[List[Any]] = Field(default=None)
+    chart: Optional[dict] = Field(default=None)
+    image_url: Optional[str] = Field(default=None)
 
 
-class ListConversationsRequest(BaseModel):
+class HistoryItemResponse(BaseModel):
+    """Response model cho history item"""
+    history_id: str
     user_id: str
-    page: Optional[int] = 1
-    limit: Optional[int] = 20
+    session_id: str
+    query: str
+    answer: str
+    feedback: Optional[str] = ""
+    feedback_status: Optional[str] = ""
+    reference: Optional[List] = None
+    chart: Optional[dict] = None
+    image_url: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
 
-class DeleteConversationRequest(BaseModel):
-    conversation_id: str
+class HistoryListResponse(BaseModel):
+    """Response model cho danh sách history"""
+    success: bool = True
+    message: str = "Thành công"
+    data: List[HistoryItemResponse]
+    total: int
+    page: int = 1
+    limit: int = 20
 
 
-@router.post("/v1/histories/create")
-@router.post("/v1/histories/create/")
-async def histories_create_endpoint(request: CreateConversationRequest, manager: MongoDBManager = Depends(get_mongodb_manager)):
-    try:
-        # Sanitize user_id and conversation_id to avoid type errors
-        user_id = str(request.user_id or "default_user").strip() or "default_user"
-        conversation_id = str(request.conversation_id or request.history_id or request.session_id or "").strip()
-        if not conversation_id:
-            conversation_id = f"conv_{int(datetime.utcnow().timestamp()*1000)}"
+class HistoryCreateResponse(BaseModel):
+    """Response model cho tạo history mới"""
+    success: bool = True
+    message: str = "Lưu lịch sử thành công"
+    data: dict
 
-        first_message = request.first_message.model_dump() if request.first_message else None
-        messages: Optional[List[Dict[str, Any]]] = None
-        if request.messages:
-            messages = [m.model_dump() for m in request.messages]
 
-        extra_document: Dict[str, Any] = {
-            "history_id": request.history_id,
-            "session_id": request.session_id,
-            "status": request.status,
-            "query": request.query,
-            "answer": request.answer,
-            "answer_segments": request.answer_segments,
-            "media": request.media,
-            "company_id": request.company_id,
-            "customer_id": request.customer_id,
-            "sender_info": request.sender_info.model_dump() if request.sender_info else None,
-            "bot_id": request.bot_id,
-            "social_id": request.social_id,
-            "social_page_id": request.social_page_id,
-            "social_access_link": request.social_access_link,
-            "created_at": request.created_at,
-        }
+class HistoryDeleteResponse(BaseModel):
+    """Response model cho xóa history"""
+    success: bool = True
+    message: str = "Xóa lịch sử thành công"
 
-        ok = await manager.create_conversation(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            first_message=first_message,
-            metadata=request.metadata,
-            messages=messages,
-            updated_at=request.updated_at,
-            extra_document=extra_document,
+
+class ErrorResponse(BaseModel):
+    """Response model cho lỗi"""
+    success: bool = False
+    message: str
+    error: Optional[str] = None
+
+
+def get_current_user_id(request: Request) -> str:
+    """
+    Lấy user ID từ request (từ token hoặc session).
+    Implement token-based authentication với Bearer token và rate limiting.
+    """
+    # Lấy Authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    if not auth_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Thiếu Authorization header"
         )
-        if not ok:
-            content = {"status": 400, "message": "create_conversation failed"}
-            return JSONResponse(content=jsonable_encoder(content), status_code=400)
-        content = {"status": 200, "message": "success"}
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
-    except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+    
+    # Validate Bearer token format
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header phải có format 'Bearer <token>'"
+        )
+    
+    # Extract token
+    token = auth_header.replace("Bearer ", "")
+    
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token không được để trống"
+        )
+    
+    # Validate token format (simple validation - in production, use JWT or similar)
+    # For now, we'll use the token as user_id if it meets basic requirements
+    if len(token) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token quá ngắn"
+        )
+    
+    # Check rate limit
+    if not check_rate_limit(token):
+        rate_info = get_rate_limit_info(token)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Limit: {rate_info['limit']} requests per {rate_info['window']} seconds. Remaining: {rate_info['remaining']}"
+        )
+    
+    # In a real implementation, you would:
+    # 1. Verify JWT signature
+    # 2. Check token expiration
+    # 3. Validate against a token blacklist
+    # 4. Extract user_id from token claims
+    
+    # For this implementation, we'll use the token as user_id
+    # In production, replace this with proper JWT validation
+    return token
 
 
-@router.post("/v1/histories/append")
-@router.post("/v1/histories/append/")
-async def histories_append_endpoint(request: AppendMessageRequest, manager: MongoDBManager = Depends(get_mongodb_manager)):
+@router.post(
+    "/v1/history",
+    response_model=HistoryCreateResponse,
+    summary="Lưu lịch sử chat vào MongoDB",
+    description="Lưu một bản ghi lịch sử mới vào database"
+)
+async def create_history(
+    request: HistoryCreateRequest,
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> HistoryCreateResponse:
+    """
+    Lưu lịch sử chat mới vào MongoDB.
+    
+    Args:
+        request: HistoryCreateRequest với thông tin lịch sử
+        db: MongoDB manager instance
+        current_user: User ID hiện tại
+        
+    Returns:
+        HistoryCreateResponse: Kết quả lưu lịch sử
+    """
     try:
-        ok = await manager.append_message(request.conversation_id, request.message.model_dump())
-        if not ok:
-            content = {"status": 400, "message": "append_message failed"}
-            return JSONResponse(content=jsonable_encoder(content), status_code=400)
-        content = {"status": 200, "message": "success"}
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+        # Validate user_id matches current user
+        if request.user_id != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Không có quyền truy cập"
+            )
+        
+        history_id = str(uuid.uuid4())
+        session_id = (request.session_id or "").strip() or str(uuid.uuid4())
+        
+        # Convert references to proper schema
+        converted_references = convert_references_to_schema(request.reference)
+        
+        # Validation: Check if references should exist based on content
+        # If the answer mentions documents, sources, or references but no references are provided
+        answer_lower = request.answer.lower()
+        query_lower = request.query.lower()
+        
+        # Keywords that suggest references should exist
+        ref_keywords = ['tài liệu', 'document', 'source', 'nguồn', 'tham khảo', 'reference', 'theo', 'according']
+        has_ref_keywords = any(keyword in answer_lower for keyword in ref_keywords)
+        
+        # If answer suggests references exist but none are provided, add a warning
+        if has_ref_keywords and not converted_references:
+            print(f"Cảnh báo: Câu trả lời có vẻ như cần tài liệu tham khảo nhưng không có references nào được cung cấp. User: {request.user_id}, Query: {request.query[:50]}...")
+            # Optionally, we could raise an exception or add default references
+            # For now, we just log a warning to help with debugging
+        
+        # Save to MongoDB
+        result = await db.save_history(
+            user_id=request.user_id,
+            history_id=history_id,
+            session_id=session_id,
+            query=request.query,
+            answer=request.answer,
+            feedback=request.feedback or "",
+            feedback_status=request.feedback_status or "",
+            references=converted_references,
+            chart=request.chart,
+            image_url=request.image_url
+        )
+        
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Không thể lưu lịch sử"
+            )
+        await broadcast_session_update(
+            current_user,
+            {
+                "session_id": session_id,
+                "preview": request.query,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+        )
+        return HistoryCreateResponse(
+            message="Lưu lịch sử thành công",
+            data={
+                "history_id": history_id,
+                "inserted_id": result
+            }
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi lưu lịch sử: {str(e)}"
+        )
 
 
-@router.post("/v1/histories/get")
-@router.post("/v1/histories/get/")
-async def histories_get_endpoint(request: GetConversationRequest, manager: MongoDBManager = Depends(get_mongodb_manager)):
+@router.get(
+    "/v1/history",
+    response_model=HistoryListResponse,
+    summary="Lấy danh sách lịch sử",
+    description="Lấy danh sách lịch sử của người dùng với các bộ lọc"
+)
+async def get_history(
+    user_id: Optional[str] = Query(None, description="Lọc theo user ID"),
+    session_id: Optional[str] = Query(None, description="Lọc theo session ID"),
+    page: int = Query(1, ge=1, description="Số trang"),
+    limit: int = Query(20, ge=1, le=100, description="Số lượng bản ghi mỗi trang"),
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> HistoryListResponse:
+    """
+    Lấy danh sách lịch sử từ MongoDB.
+    
+    Args:
+        user_id: User ID để lọc (optional)
+        session_id: Session ID để lọc (optional)
+        page: Số trang
+        limit: Số lượng bản ghi mỗi trang
+        db: MongoDB manager instance
+        current_user: User ID hiện tại
+        
+    Returns:
+        HistoryListResponse: Danh sách lịch sử
+    """
     try:
-        doc = await manager.get_conversation(request.conversation_id)
-        content = {"status": 200, "message": "success", "data": doc}
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+        # Use current_user if user_id not provided
+        filter_user_id = user_id or current_user
+        
+        # Validate access
+        if user_id and user_id != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Không có quyền truy cập"
+            )
+        
+        # Get history from MongoDB
+        histories = await db.get_user_history(
+            user_id=filter_user_id,
+            session_id=session_id,
+            limit=limit,
+            skip=(page - 1) * limit
+        )
+        
+        # Convert to response format
+        history_items = []
+        for history in histories:
+            history_items.append(HistoryItemResponse(
+                history_id=history.get("history_id", ""),
+                user_id=history.get("user_id", ""),
+                session_id=history.get("session_id", ""),
+                query=history.get("query", ""),
+                answer=history.get("answer", ""),
+                feedback=history.get("feedback", ""),
+                feedback_status=history.get("feedback_status", ""),
+                reference=history.get("reference", []),
+                chart=history.get("chart"),
+                image_url=history.get("image_url"),
+                timestamp=history.get("timestamp"),
+                created_at=history.get("created_at")
+            ))
+        
+        # Get total count
+        total = len(history_items)  # For now, get actual count would need separate query
+        
+        return HistoryListResponse(
+            message="Lấy danh sách lịch sử thành công",
+            data=history_items,
+            total=total,
+            page=page,
+            limit=limit
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi lấy lịch sử: {str(e)}"
+        )
 
 
-@router.post("/v1/histories/list")
-@router.post("/v1/histories/list/")
-async def histories_list_endpoint(request: ListConversationsRequest, manager: MongoDBManager = Depends(get_mongodb_manager)):
+@router.delete(
+    "/v1/history/{history_id}",
+    response_model=HistoryDeleteResponse,
+    summary="Xóa bản ghi lịch sử",
+    description="Xóa một bản ghi lịch sử theo ID"
+)
+async def delete_history(
+    history_id: str,
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> HistoryDeleteResponse:
+    """
+    Xóa lịch sử theo ID.
+    
+    Args:
+        history_id: ID của history cần xóa
+        db: MongoDB manager instance
+        current_user: User ID hiện tại
+        
+    Returns:
+        HistoryDeleteResponse: Kết quả xóa
+    """
     try:
-        page = max(1, int(request.page or 1))
-        limit = max(1, min(100, int(request.limit or 20)))
-        skip = (page - 1) * limit
-        items = await manager.list_conversations(request.user_id, limit=limit, skip=skip)
-        total = await manager.count_conversations_by_user(request.user_id)
-        content = {"status": 200, "message": "success", "data": {"items": items, "page": page, "limit": limit, "total": total}}
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+        # First, get the history to verify ownership
+        history = await db.get_history_by_id(history_id)
+        
+        if not history:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy lịch sử"
+            )
+        
+        # Verify ownership
+        if history.get("user_id") != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Không có quyền xóa lịch sử này"
+            )
+        
+        # Delete from MongoDB
+        success = await db.delete_history(history_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Không thể xóa lịch sử"
+            )
+        
+        return HistoryDeleteResponse(
+            message="Xóa lịch sử thành công"
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi xóa lịch sử: {str(e)}"
+        )
 
 
-@router.post("/v1/histories/delete")
-@router.post("/v1/histories/delete/")
-async def histories_delete_endpoint(request: DeleteConversationRequest, manager: MongoDBManager = Depends(get_mongodb_manager)):
+@router.get(
+    "/v1/history/sessions",
+    response_model=dict,
+    summary="Lấy danh sách sessions",
+    description="Lấy tất cả sessions của người dùng hiện tại"
+)
+async def get_user_sessions(
+    limit: int = Query(50, ge=1, le=1000),
+    skip: int = Query(0, ge=0),
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> dict:
+    """
+    Lấy danh sách sessions của user.
+    
+    Args:
+        db: MongoDB manager instance
+        current_user: User ID hiện tại
+        
+    Returns:
+        dict: Danh sách sessions
+    """
     try:
-        ok = await manager.delete_conversation(request.conversation_id)
-        if not ok:
-            content = {"status": 404, "message": "conversation not found"}
-            return JSONResponse(content=jsonable_encoder(content), status_code=404)
-        content = {"status": 200, "message": "success"}
-        return JSONResponse(content=jsonable_encoder(content), status_code=200)
+        sessions = await db.get_user_sessions(current_user)
+        sessions_sorted = sorted(
+            sessions,
+            key=lambda s: s.get("last_activity") or s.get("updated_at") or s.get("created_at") or "",
+            reverse=True,
+        )
+        total = len(sessions_sorted)
+        paged = sessions_sorted[skip: skip + limit]
+        enriched = []
+        for s in paged:
+            try:
+                sid = s.get("session_id") or s.get("id") or ""
+                latest = await db.get_user_history(
+                    user_id=current_user,
+                    session_id=sid,
+                    limit=1,
+                    skip=0,
+                )
+                if latest:
+                    item = latest[0]
+                    q = str(item.get("query", ""))
+                    head = q.split("\n")[0] if q else ""
+                    s["preview"] = head or "New chat"
+                else:
+                    s["preview"] = "New chat"
+            except Exception:
+                s["preview"] = "New chat"
+            enriched.append(s)
+        return {
+            "success": True,
+            "message": "Lấy danh sách sessions thành công",
+            "data": enriched,
+            "total": total,
+        }
+        
     except Exception as e:
-        content = {"status": 400, "message": "Error: " + str(e)}
-        return JSONResponse(content=jsonable_encoder(content), status_code=400)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi lấy sessions: {str(e)}"
+        )
 
 
+@router.get(
+    "/v1/history/rate-limit",
+    response_model=dict,
+    summary="Lấy thông tin rate limit",
+    description="Lấy thông tin rate limit hiện tại của user"
+)
+async def get_rate_limit_status(
+    current_user: str = Depends(get_current_user_id)
+) -> dict:
+    """
+    Lấy thông tin rate limit của user hiện tại.
+    
+    Args:
+        current_user: User ID hiện tại
+        
+    Returns:
+        dict: Thông tin rate limit
+    """
+    try:
+        rate_info = get_rate_limit_info(current_user)
+        
+        return {
+            "success": True,
+            "message": "Lấy thông tin rate limit thành công",
+            "data": rate_info
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi lấy thông tin rate limit: {str(e)}"
+        )
+
+
+@router.get("/v1/history/image/{image_id}")
+@router.get("/v1/history/image/{image_id}/")
+async def get_history_image(
+    image_id: str,
+    current_user: str = Depends(get_current_user_id)
+):
+    """
+    Lấy ảnh từ lịch sử chat.
+    Chỉ cho phép người dùng sở hữu ảnh mới có thể truy cập.
+    """
+    try:
+        db = await get_mongodb_manager()
+        
+        # Get image from MongoDB
+        image_data = await db.get_image(image_id)
+        
+        if not image_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Không tìm thấy ảnh"
+            )
+        
+        # Check if user owns the image
+        if image_data.get("user_id") != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Không có quyền truy cập ảnh này"
+            )
+        
+        # Return image with proper content type
+        return Response(
+            content=image_data["binary_data"],
+            media_type=image_data["content_type"],
+            headers={
+                "Content-Disposition": f"inline; filename=image_{image_id}"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi lấy ảnh: {str(e)}"
+        )
+
+@router.websocket("/ws/history")
+async def ws_history(websocket: WebSocket):
+    try:
+        token = websocket.query_params.get("token")
+        if not token or len(token) < 8:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        await websocket.accept()
+        user_id = token
+        active_ws_connections[user_id].append(websocket)
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+    finally:
+        try:
+            for uid, lst in list(active_ws_connections.items()):
+                if websocket in lst:
+                    lst.remove(websocket)
+                    if not lst:
+                        active_ws_connections.pop(uid, None)
+                    break
+        except Exception:
+            pass
+@router.delete(
+    "/v1/history/sessions/{session_id}",
+    response_model=dict,
+    summary="Xóa một session",
+    description="Xóa session và toàn bộ lịch sử của nó"
+)
+async def delete_session(
+    session_id: str,
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> dict:
+    try:
+        success = await db.delete_session(current_user, session_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Không thể xóa session {session_id} cho user {current_user}"
+            )
+        return {
+            "success": True,
+            "message": "Xóa session thành công",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi xóa session: {str(e)}"
+        )
+
+@router.post(
+    "/v1/history/sessions/delete",
+    response_model=dict,
+    summary="Xóa session (fallback)",
+    description="Xóa session và toàn bộ lịch sử của nó bằng POST"
+)
+async def delete_session_fallback(
+    payload: Dict[str, str],
+    db: MongoDBManager = Depends(get_mongodb_manager),
+    current_user: str = Depends(get_current_user_id)
+) -> dict:
+    try:
+        session_id = payload.get("session_id", "")
+        if not session_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Thiếu session_id")
+        success = await db.delete_session(current_user, session_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Không thể xóa session {session_id} cho user {current_user} (fallback)"
+            )
+        return {
+            "success": True,
+            "message": "Xóa session thành công",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi server khi xóa session: {str(e)}"
+        )
