@@ -32,6 +32,7 @@ def answer_char_plotly(user_id, contexts, query):
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", prompt_chatbot_chart.GENERATE_CHART_PLOTLY),
+                ("human", "{query}"),
             ]
         )
 

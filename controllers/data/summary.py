@@ -54,6 +54,7 @@ def text_summary(user_id, contexts):
                     context=str(contexts),
                 ),
             ),
+            ("human", "Hãy tóm tắt nội dung context ở trên."),
         ]
     )
 

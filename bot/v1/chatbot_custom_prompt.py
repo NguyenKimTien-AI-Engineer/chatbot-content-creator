@@ -93,7 +93,7 @@ async def search_products_qdrant(query: str, limit: int = 3) -> str:
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_msg),
-                ("user", "{query}")
+                ("human", "{query}"),
             ])
 
             chain = prompt | environment.get_llm(model=constant.MODEL_CHATBOT_SUGGESTION) | StrOutputParser()
@@ -293,6 +293,7 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt_chatbot_custom.CHATBOT),
+            ("human", "{question}"),
         ]
     )
 
@@ -334,7 +335,7 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         print(f"📊 History Length: {len(str(history_context))} characters")
 
     chain = (
-            prompt | environment.get_llm(model=constant.MODEL_CHATBOT_CUSTOM_PROMPT) | StrOutputParser()
+            prompt | environment.get_llm(model=constant.MODEL_CHATBOT_CUSTOM_PROMPT, streaming=True) | StrOutputParser()
     )
 
     answer = ""
@@ -344,7 +345,6 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
         stop_yielding = False
 
         ans_ref = ""
-        buffer = ""
 
         # Lưu lịch sử: khởi tạo hội thoại và ghi message của user
         try:
@@ -365,33 +365,16 @@ def chatbot_custom_prompt_stream(user_id, query, collections, session_id, histor
                 chunk = " " + chunk
 
             if not stop_yielding:
-                # Bỏ qua chunk rỗng/space-only để tránh sự kiện trống
-                if chunk and chunk.strip() != "":
-                    # Gom chunk để tránh gửi ký tự lẻ
-                    buffer += chunk
-                    should_flush = (
-                        buffer.endswith((" ", ".", ",", "!", "?", "\n"))
-                        or len(buffer) >= 32
-                    )
-                    if should_flush:
-                        answer += buffer
-                        try:
-                            sse_payload = json.dumps({"content": buffer}, ensure_ascii=False)
-                        except Exception:
-                            sse_payload = json.dumps({"content": str(buffer)})
-                        yield f"data: {sse_payload}\r\n\r\n"
-                        buffer = ""
+                if not chunk:
+                    continue
+                answer += chunk
+                try:
+                    sse_payload = json.dumps({"content": chunk}, ensure_ascii=False)
+                except Exception:
+                    sse_payload = json.dumps({"content": str(chunk)})
+                yield f"data: {sse_payload}\r\n\r\n"
             else:
                 ans_ref += chunk
-
-        # Flush phần buffer còn lại nếu có
-        if buffer:
-            answer += buffer
-            try:
-                sse_payload_tail = json.dumps({"content": buffer}, ensure_ascii=False)
-            except Exception:
-                sse_payload_tail = json.dumps({"content": str(buffer)})
-            yield f"data: {sse_payload_tail}\r\n\r\n"
 
         pages = reference.extract_reference_document_numbers(ans_ref)
         print("pages: ", pages)
@@ -516,6 +499,7 @@ def chatbot_custom_prompt(user_id, query, collections, session_id, history_id, s
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt_chatbot_custom.CHATBOT),
+            ("human", "{question}"),
         ]
     )
 

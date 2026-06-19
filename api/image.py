@@ -2,44 +2,43 @@ from fastapi import APIRouter, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from typing import Optional
-import base64
 import asyncio
+import os
 
-from openai import OpenAI
+import google.generativeai as genai
 
 
 router = APIRouter()
 
+GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+
+
+def _get_model() -> genai.GenerativeModel:
+    genai.configure(api_key=GOOGLE_API_KEY)
+    return genai.GenerativeModel(GEMINI_VISION_MODEL)
+
+
+def _analysis_prompt() -> str:
+    return (
+        "Phân tích thật chi tiết hình ảnh: mô tả đối tượng, màu sắc, chất liệu,"
+        " phong cách tổng thể, bối cảnh; đánh giá chất lượng và cảm xúc hình ảnh."
+        " Rút ra cảm nhận ngắn gọn phù hợp với sản phẩm thời trang da thật."
+    )
+
 
 async def _analyze_image_bytes(image_bytes: bytes, mime_type: str) -> str:
-    """Phân tích ảnh bằng OpenAI và trả về mô tả chi tiết.
-
-    Hàm chạy tác vụ đồng bộ của OpenAI trong thread để giữ async cho FastAPI.
-    """
-    client = OpenAI()
-    data_url = f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("utf-8")
+    """Phân tích ảnh bằng Gemini và trả về mô tả chi tiết."""
+    model = _get_model()
 
     def _run() -> str:
-        res = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "Phân tích thật chi tiết hình ảnh: mô tả đối tượng, màu sắc, chất liệu,"
-                                " phong cách tổng thể, bối cảnh; đánh giá chất lượng và cảm xúc hình ảnh."
-                                " Rút ra cảm nhận ngắn gọn phù hợp với sản phẩm thời trang da thật."
-                            ),
-                        },
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
+        response = model.generate_content(
+            [
+                _analysis_prompt(),
+                {"mime_type": mime_type, "data": image_bytes},
+            ]
         )
-        return res.choices[0].message.content or ""
+        return response.text or ""
 
     return await asyncio.to_thread(_run)
 
@@ -59,29 +58,11 @@ async def analyze_image_endpoint(
             return JSONResponse(content=jsonable_encoder(resp), status_code=200)
 
         if url:
-            client = OpenAI()
+            model = _get_model()
 
             def _run_url() -> str:
-                res = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "Phân tích thật chi tiết hình ảnh: mô tả đối tượng, màu sắc, chất liệu,"
-                                        " phong cách tổng thể, bối cảnh; đánh giá chất lượng và cảm xúc hình ảnh."
-                                        " Rút ra cảm nhận ngắn gọn phù hợp với sản phẩm thời trang da thật."
-                                    ),
-                                },
-                                {"type": "image_url", "image_url": {"url": url}},
-                            ],
-                        }
-                    ],
-                )
-                return res.choices[0].message.content or ""
+                response = model.generate_content([_analysis_prompt(), url])
+                return response.text or ""
 
             text = await asyncio.to_thread(_run_url)
             resp = {"status": 200, "message": "success", "data": {"image_text": text}}

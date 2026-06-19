@@ -1,111 +1,72 @@
 "use client";
 
-import { 
-  Home, 
-  FileText, 
-  Settings, 
-  Users, 
-  BarChart3,
-  Sparkles,
-  Edit3,
-  MessageSquare
-} from "lucide-react";
+import { Home, Settings, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/lib/i18n";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { ChatHistoryPanel } from "@/components/layout/chat-history-panel";
 
 const menuItems = [
-  {
-    title: "Trang chủ",
-    url: "/",
-    icon: Home,
-  },
-  {
-    title: "Chat",
-    url: "/chat",
-    icon: MessageSquare,
-  },
-  // {
-  //   title: "Tạo nội dung Fanpage",
-  //   url: "/fanpage",
-  //   icon: FileText,
-  // },
-  // {
-  //   title: "Custom Prompt",
-  //   url: "/custom-prompt",
-  //   icon: Edit3,
-  // },
-  // {
-  //   title: "Kế hoạch nội dung",
-  //   url: "#",
-  //   icon: BarChart3,
-  // },
-  // {
-  //   title: "Branding",
-  //   url: "#",
-  //   icon: Sparkles,
-  // },
-  // {
-  //   title: "Quản lý người dùng",
-  //   url: "#",
-  //   icon: Users,
-  // },
-  {
-    title: "Cài đặt",
-    url: "#",
-    icon: Settings,
-  },
+  { key: "home" as const, url: "/", icon: Home },
+  { key: "chat" as const, url: "/chat", icon: MessageSquare },
+  { key: "settings" as const, url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { t } = useTranslation();
 
   return (
-  <Sidebar className="border-r bg-white">
-    <SidebarContent>
-      <SidebarGroup>
-        <SidebarGroupLabel className="flex items-center text-lg font-semibold text-blue-700 px-4 py-6 gap-2">
-          <img
-            src="/logo.png"
-            alt="MekongAI Logo"
-            className="w-6 h-6 object-contain"
-          />
-          MEKONGAI
-        </SidebarGroupLabel>
+    <Sidebar
+      className="border-r border-[var(--gpt-border)] bg-[var(--gpt-sidebar)] [&_[data-sidebar=sidebar]]:border-0 [&_[data-sidebar=sidebar]]:bg-[var(--gpt-sidebar)] [&_[data-sidebar=sidebar]]:shadow-none"
+    >
+      <SidebarContent className="flex h-full flex-col px-2 py-3">
+        <div className="mb-4 shrink-0 px-2 py-2">
+          <span className="text-base font-semibold tracking-tight text-neutral-900">KAT</span>
+        </div>
 
-        <SidebarGroupContent>
-          <SidebarMenu>
-            {menuItems.map((item) => (
-              <SidebarMenuItem key={item.title}>
-                <SidebarMenuButton
-                  asChild
-                  isActive={pathname === item.url}
-                  className={cn(
-                    "w-full justify-start px-4 py-3 text-gray-700 hover:bg-gray-50 hover:text-gray-900",
-                    pathname === item.url && "bg-blue-50 text-blue-700 border-r-2 border-blue-600"
-                  )}
-                >
-                  <Link href={item.url}>
-                    <item.icon className="mr-3 h-5 w-5" />
-                    {item.title}
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    </SidebarContent>
-  </Sidebar>
-);
+        <SidebarGroup className="shrink-0 p-0">
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-0.5">
+              {menuItems.map((item) => {
+                const active = pathname === item.url;
+                return (
+                  <SidebarMenuItem key={item.key}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={active}
+                      className={cn(
+                        "h-10 rounded-lg px-3 text-sm text-neutral-700 transition-colors",
+                        "hover:bg-[var(--gpt-hover)] hover:text-neutral-900",
+                        active && "bg-[var(--gpt-hover)] text-neutral-900 font-medium"
+                      )}
+                    >
+                      <Link href={item.url}>
+                        <item.icon className="mr-2 h-4 w-4" />
+                        {t.nav[item.key]}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <div className="mt-3 min-h-0 flex-1 border-t border-[var(--gpt-border)] pt-3">
+          <ChatHistoryPanel />
+        </div>
+      </SidebarContent>
+    </Sidebar>
+  );
 }

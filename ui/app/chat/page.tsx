@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, Smile, Plus } from "lucide-react";
-import { AppSidebar } from "@/components/layout/app-sidebar";
-import Image from "next/image";
+import { Send, Plus } from "lucide-react";
 import { Header } from "@/components/layout/header";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { AppShell } from "@/components/layout/app-shell";
+import { useSettingsStore } from "@/store/settings-store";
+import { readStoredSessionId, useChatStore } from "@/store/chat-store";
+import { api } from "@/lib/api";
+import { ChatEmptyGreeting, ChatQuickPromptBar, type PromptId } from "@/components/chat/chat-empty-hero";
+import { useTranslation } from "@/lib/i18n";
 
 type Role = "user" | "assistant" | "chart" | "reference";
 
@@ -16,15 +19,7 @@ interface ChatMessage {
   timestamp: number;
 }
 
-const DEFAULT_COLLECTION = "CHATBOT_MekongAI_d41b1532-bf75-481d-ad6d-b7dac8cbae4d";
 const CHART_SENTINEL = "### === GENERATE CHART === ###";
-
-function generateRandomHistoryId(length = 15) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let out = "";
-  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
-}
 
 function fixLinksInHtml(rawHtml: string): string {
   try {
@@ -65,29 +60,21 @@ function fixLinksInHtml(rawHtml: string): string {
     return rawHtml;
   }
 }
-// Format assistant text into rich HTML: bold first line (title), convert bullet/numbered lines into lists, keep inline icons/emojis if present.
+// Format assistant markdown into HTML. Only applies bold/headings when markdown explicitly marks them.
 function formatAssistantHtml(raw: string): string {
   try {
     const normalized = String(raw || "").replace(/\r\n/g, "\n");
     if (!normalized.trim()) return "";
 
-    const firstBreak = normalized.indexOf("\n");
-    const head = (firstBreak >= 0 ? normalized.slice(0, firstBreak) : normalized).trim();
-    const tail = firstBreak >= 0 ? normalized.slice(firstBreak + 1) : "";
-
     const boldInline = (s: string) =>
       s
         .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
         .replace(/_(.+?)_/g, "<em>$1</em>")
-        .replace(/`([^`]+?)`/g, "<code class=\"px-1 py-0.5 bg-gray-100 rounded\">$1</code>")
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">$1<\/a>');
+        .replace(/`([^`]+?)`/g, "<code class=\"px-1 py-0.5 bg-gray-100 rounded text-sm\">$1</code>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">$1</a>');
 
     let html = "";
-    if (head) {
-      html += `<div class="font-semibold text-gray-900 mb-2 flex items-center gap-2">${boldInline(head)}</div>`;
-    }
-
-    const lines = tail.split("\n");
+    const lines = normalized.split("\n");
     const bulletRegex = /^(?:[-*•]|–)\s+/;
     const numRegex = /^\d+[\).\s]+/;
     let inUl = false;
@@ -150,7 +137,7 @@ function formatAssistantHtml(raw: string): string {
         html += `</table></div>`;
       } else {
         const [k, v] = kvRows[0];
-        html += `<p class="mb-2"><strong>${escapeHtml(k)}:</strong> ${boldInline(escapeHtml(v))}</p>`;
+        html += `<p class="mb-1"><span class="font-medium text-neutral-900">${escapeHtml(k)}:</span> ${boldInline(escapeHtml(v))}</p>`;
       }
       inKV = false;
       kvRows = [];
@@ -201,12 +188,16 @@ function formatAssistantHtml(raw: string): string {
 
     for (const line of lines) {
       const t = line.trim();
-      if (!t) continue;
+      if (!t) {
+        closeLists(); flushTable(); flushKV();
+        html += `<div class="h-3"></div>`;
+        continue;
+      }
       // Normalize stray tabs in inline content (outside code blocks)
       const tNorm = t.replace(/\t+/g, " ");
       // Handle full-line bold like `** Tiêu đề \t **`
       const fullBold = tNorm.match(/^\*\*\s*(.*?)\s*\*\*$/);
-      if (fullBold) { closeLists(); flushCode(); flushTable(); flushKV(); html += `<div class="font-semibold text-gray-900 mt-2 mb-1">${escapeHtml(fullBold[1])}</div>`; continue; }
+      if (fullBold) { closeLists(); flushCode(); flushTable(); flushKV(); html += `<p class="mb-2 font-medium text-neutral-900">${escapeHtml(fullBold[1])}</p>`; continue; }
       // Callout fences
       const calloutOpen = tNorm.match(/^:::(info|warning|success|note)$/i);
       if (calloutOpen) { closeLists(); flushCode(); flushTable(); flushKV(); inCallout = true; calloutType = calloutOpen[1].toLowerCase(); calloutBuffer = []; continue; }
@@ -228,7 +219,7 @@ function formatAssistantHtml(raw: string): string {
       if (hMatch) {
         closeLists(); flushTable(); flushKV();
         const level = Math.min(hMatch[1].length + 2, 6);
-        html += `<h${level} class="font-semibold text-gray-900 mt-2 mb-1">${boldInline(hMatch[2])}</h${level}>`;
+        html += `<h${level} class="font-medium text-neutral-900 mt-4 mb-2">${boldInline(hMatch[2])}</h${level}>`;
         continue;
       }
       // Labelled chips
@@ -301,18 +292,16 @@ function formatAssistantHtml(raw: string): string {
       } else if (inKV) {
         flushKV();
       }
-      // Subheading ending with ':'
-      if (/^[^:]{2,}:$/.test(tNorm)) { closeLists(); flushTable(); flushKV(); html += `<div class=\"font-semibold text-gray-900 mt-2 mb-1\">${boldInline(tNorm)}</div>`; continue; }
       // Hashtags line -> chips
       const tags = tNorm.match(/#[^\s#]+/g);
       if (tags && tags.length >= 2) {
         closeLists(); flushTable(); flushKV();
-        html += `<div class=\"flex flex-wrap gap-1 mb-2\">` + tags.map((tag) => `<span class=\"px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs\">${escapeHtml(tag)}</span>`).join("") + `</div>`;
+        html += `<div class="flex flex-wrap gap-1 mb-2">` + tags.map((tag) => `<span class="px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs">${escapeHtml(tag)}</span>`).join("") + `</div>`;
         continue;
       }
-      // Default paragraph
+      // Default paragraph — normal weight; bold only via ** markdown
       closeLists(); flushTable(); flushKV();
-      html += `<p class=\"mb-2\">${boldInline(tNorm)}</p>`;
+      html += `<p class="mb-2 leading-7 text-neutral-800">${boldInline(escapeHtml(tNorm))}</p>`;
     }
     closeLists(); flushCode(); flushTable(); flushKV(); flushCallout();
 
@@ -371,11 +360,46 @@ type ChatbotType = "reference" | "chart";
 async function streamChat(
   chatbotType: ChatbotType,
   payload: any,
+  useStreaming: boolean,
   onChunk: (text: string) => void,
   onGenerateChartFlag: () => void,
   onMeta: (metadata: any) => void
 ) {
   const pathStream = chatbotType === "chart" ? "/api/v1/chatbot-chart-stream" : "/api/v1/chatbot-custom-prompt-stream";
+  const pathNonStream = chatbotType === "chart" ? "/api/v1/chatbot-chart" : "/api/v1/chatbot-custom-prompt";
+
+  if (!useStreaming) {
+    const pathsNon = getApiPaths(pathNonStream);
+    let nonRes: Response | null = null;
+    try {
+      nonRes = await fetch(pathsNon.relative, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      if (pathsNon.absolute) {
+        nonRes = await fetch(pathsNon.absolute, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        throw e;
+      }
+    }
+    if (!nonRes.ok) {
+      onChunk("Xin lỗi, hệ thống đang gặp sự cố và chưa thể trả lời.");
+      return;
+    }
+    const data = await nonRes.json();
+    const answer = data?.data?.answer ?? data?.data ?? "";
+    const reference = data?.data?.reference ?? null;
+    if (answer) onChunk(String(answer));
+    if (reference) onMeta({ reference });
+    return;
+  }
+
   const pathsStream = getApiPaths(pathStream);
   let res: Response | null = null;
   // Prefer absolute to avoid proxy buffering; fallback to relative
@@ -563,14 +587,18 @@ async function streamChat(
 }
 
 export default function ModernChatPage() {
+  const { t } = useTranslation();
+  const chatSettings = useSettingsStore((s) => s.settings);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [selectedPromptId, setSelectedPromptId] = useState<PromptId | null>(null);
   const [isTyping, setIsTyping] = useState(false);
-  const [systemInstructionUser, setSystemInstructionUser] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [refToggle, setRefToggle] = useState(false);
-  const [sessionId, setSessionId] = useState("");
-  const [userId] = useState<string>("default");
+  const sessionId = useChatStore((s) => s.sessionId);
+  const setSessionId = useChatStore((s) => s.setSessionId);
+  const startNewChat = useChatStore((s) => s.startNewChat);
+  const refreshHistory = useChatStore((s) => s.refreshHistory);
+  const userId = chatSettings.userId || "default";
   const [pendingChart, setPendingChart] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -580,7 +608,6 @@ export default function ModernChatPage() {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [imageAnalyses, setImageAnalyses] = useState<string[]>([]);
   const [showPlusMenu, setShowPlusMenu] = useState<boolean>(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
   const assistantStreamingIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -595,7 +622,44 @@ export default function ModernChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!sessionId) setSessionId(generateRandomHistoryId());
+    if (sessionId) return;
+    const stored = readStoredSessionId();
+    if (stored) setSessionId(stored);
+    else startNewChat();
+  }, [sessionId, setSessionId, startNewChat]);
+
+  useEffect(() => {
+    setMessages([]);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const resp = await api.historiesGet(sessionId);
+        if (cancelled) return;
+        const raw = resp?.data?.messages || [];
+        if (!raw.length) return;
+        const mapped: ChatMessage[] = raw.map((m, i) => ({
+          id: `${sessionId}-${i}`,
+          role: m.role === "user" ? "user" : "assistant",
+          content:
+            typeof m.content === "string"
+              ? m.content
+              : String((m.content as { text?: string })?.text ?? m.content ?? ""),
+          timestamp: Date.now() - (raw.length - i) * 1000,
+        }));
+        setMessages(mapped);
+      } catch {
+        /* keep empty state for new conversations */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [sessionId]);
 
   useEffect(() => {
@@ -612,12 +676,18 @@ export default function ModernChatPage() {
     }
   }, [uploadError]);
 
+  const handleSelectPrompt = (prompt: string, id: PromptId) => {
+    setSelectedPromptId(id);
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   const handleSendMessage = async () => {
     if (input.trim() === "" && attachedFiles.length === 0) return;
 
     const now = Date.now();
-    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
-    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
+    const defaultOne = t.chat.imageDefaultOne;
+    const defaultTwo = t.chat.imageDefaultTwo;
     const textToSend = input.trim() !== ""
       ? input.trim()
       : (attachedFiles.length >= 2 ? defaultTwo : defaultOne);
@@ -666,11 +736,11 @@ export default function ModernChatPage() {
     const payload = {
       user_id: userId,
       query: typeof userMessage.content === "string" ? userMessage.content : userMessage.content?.text || "",
-      collections: [DEFAULT_COLLECTION],
+      collections: [chatSettings.defaultCollection],
       session_id: sessionId,
       history_id: "",
-      system_instruction_user: systemInstructionUser,
-      include_products: true,
+      system_instruction_user: chatSettings.systemInstructionUser,
+      include_products: chatSettings.includeProducts,
       image_text: joinImageAnalyses(analyses),
     };
 
@@ -680,7 +750,6 @@ export default function ModernChatPage() {
     setAttachedFiles([]);
     setImageAnalyses([]);
     setShowPlusMenu(false);
-    setShowEmojiPicker(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
 
     const assistantId = (Date.now() + 1).toString();
@@ -690,6 +759,7 @@ export default function ModernChatPage() {
     await streamChat(
       chatbotType,
       payload,
+      chatSettings.streamingEnabled,
       (chunk) => {
         fullAnswer += chunk;
         setMessages((prev) => {
@@ -745,6 +815,7 @@ export default function ModernChatPage() {
     }
 
     setIsTyping(false);
+    refreshHistory();
   };
 
   const handleAttachClick = () => {
@@ -808,7 +879,7 @@ export default function ModernChatPage() {
     try {
       const form = new FormData();
       form.append("user_id", userId || "default");
-      form.append("collection_name", DEFAULT_COLLECTION);
+      form.append("collection_name", chatSettings.defaultCollection);
       form.append("file", file);
       form.append("language", "vie+eng");
       form.append("note", "");
@@ -872,149 +943,116 @@ export default function ModernChatPage() {
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString("vi-VN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   return (
-    <SidebarProvider>
-      <div className="flex h-screen bg-white">
-        <AppSidebar />
-
-        {/* Main Content */}
-        <div className="flex flex-col flex-1 relative">
-          {/* Header */}
+    <AppShell>
+        <div className="flex flex-col flex-1 relative min-h-0">
           <Header />
 
-          {/* Messages / Empty State */}
           {messages.length === 0 ? (
-            <main className="flex-1 bg-gray-50 flex items-center justify-center px-4 md:px-6">
-              <div className="max-w-2xl w-full mx-auto flex flex-col items-center">
-                <h1 className="text-5xl font-semibold tracking-tight text-gray-900 mb-6 select-none">MEKONGAI</h1>
-                <div className="flex items-center gap-2 w-full">
-                  <div className="flex-1">
+            <main className="flex-1 flex items-center justify-center overflow-y-auto min-h-0 px-4 md:px-6 py-8">
+              <div className="w-full max-w-3xl flex flex-col items-center">
+                <ChatEmptyGreeting displayName={chatSettings.displayName} />
+
+                <div className="w-full rounded-[1.75rem] border border-[var(--gpt-border)] bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileSelected}
+                  />
+                  {attachedPreviews.length > 0 && (
+                    <div className="px-3 pt-3 flex flex-wrap gap-2">
+                      {attachedPreviews.slice(0, 2).map((src, idx) => (
+                        <div key={idx} className="inline-block relative">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={src}
+                            alt={`attachment-preview-${idx}`}
+                            className="w-28 h-28 rounded-xl border border-neutral-200 object-cover bg-white dark:border-neutral-700"
+                          />
+                          <button
+                            onClick={() => {
+                              try { URL.revokeObjectURL(src); } catch { /* noop */ }
+                              setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
+                              setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
+                              setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
+                            }}
+                            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-neutral-900 text-white text-sm flex items-center justify-center"
+                            title={t.chat.removeImage}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="relative flex items-center px-2 py-1.5">
                     <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      className="hidden"
-                      onChange={handleFileSelected}
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        if (selectedPromptId) setSelectedPromptId(null);
+                      }}
+                      onPaste={handlePaste}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                      placeholder={t.chat.inputPlaceholder}
+                      className="w-full py-3 pl-14 pr-16 rounded-[1.75rem] border-0 bg-transparent focus:outline-none text-base placeholder:text-neutral-400 text-neutral-900"
                     />
-                    {attachedPreviews.length > 0 && (
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        {attachedPreviews.slice(0, 2).map((src, idx) => (
-                          <div key={idx} className="inline-block relative">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={src}
-                              alt={`attachment-preview-${idx}`}
-                              className="w-28 h-28 rounded-xl border border-gray-200 object-cover bg-white"
-                            />
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowPlusMenu((s) => !s)}
+                          disabled={isUploading}
+                          className="p-2 rounded-full text-neutral-500 transition-colors hover:bg-[var(--gpt-hover)]"
+                          title={isUploading ? t.chat.uploading : t.chat.add}
+                        >
+                          <Plus className="w-5 h-5" />
+                        </button>
+                        {showPlusMenu && (
+                          <div className="absolute z-10 bottom-full mb-2 w-56 rounded-xl border border-[var(--gpt-border)] bg-white shadow-lg p-1.5">
                             <button
-                              onClick={() => {
-                                try { URL.revokeObjectURL(src); } catch { /* noop */ }
-                                setAttachedPreviews((prev) => prev.filter((_, i) => i !== idx));
-                                setAttachedFiles((prev) => prev.filter((_, i) => i !== idx));
-                                setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
-                              }}
-                              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
-                              title="Xóa ảnh"
+                              onClick={handleAttachClick}
+                              className="w-full text-left px-3 py-2 rounded-lg hover:bg-[var(--gpt-hover)] text-sm"
                             >
-                              ×
+                              {t.chat.addFiles}
                             </button>
                           </div>
-                        ))}
+                        )}
                       </div>
-                    )}
-                    <div className="relative">
-                      <input
-                        ref={inputRef}
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onPaste={handlePaste}
-                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                        placeholder="Bạn muốn biết điều gì?"
-                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
-                      />
-                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                        <div className="relative">
-                          <button
-                            onClick={() => setShowPlusMenu((s) => !s)}
-                            disabled={isUploading}
-                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            title={isUploading ? "Đang tải..." : "Thêm"}
-                          >
-                            <Plus className="w-5 h-5 text-gray-400" />
-                          </button>
-                          {showPlusMenu && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
-                              <button
-                                onClick={handleAttachClick}
-                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
-                              >
-                                Add photos & files
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="relative">
-                          <button
-                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            onClick={() => setShowEmojiPicker((s) => !s)}
-                            title="Chèn biểu tượng cảm xúc"
-                          >
-                            <Smile className="w-5 h-5 text-gray-400" />
-                          </button>
-                          {showEmojiPicker && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
-                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
-                                <button
-                                  key={emo}
-                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
-                                  onClick={() => {
-                                    const base = input.trim();
-                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
-                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
-                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
-                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
-                                    setShowEmojiPicker(false);
-                                  }}
-                                >{emo}</button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleSendMessage}
-                        disabled={!input.trim() && attachedFiles.length === 0}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                      >
-                        <Send className="w-5 h-5" />
-                      </button>
                     </div>
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!input.trim() && attachedFiles.length === 0}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-full bg-black text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
                   </div>
-                  
+                  {isUploading && (
+                    <p className="text-xs text-neutral-500 text-center py-2">{t.chat.processing}</p>
+                  )}
+                  {uploadSuccess && uploadMessage && (
+                    <p className="text-xs text-neutral-600 text-center py-2" aria-live="polite">{uploadMessage}</p>
+                  )}
+                  {uploadError && (
+                    <p className="text-xs text-red-600 text-center py-2" aria-live="polite">{uploadError}</p>
+                  )}
                 </div>
-                {isUploading && (
-                  <p className="text-xs text-blue-600 text-center mt-2">Đang tải và xử lý tài liệu...</p>
-                )}
-                {uploadSuccess && uploadMessage && (
-                  <p className="text-xs text-green-600 text-center mt-2" aria-live="polite">{uploadMessage}</p>
-                )}
-                {uploadError && (
-                  <p className="text-xs text-red-600 text-center mt-2" aria-live="polite">{uploadError}</p>
-                )}
-                <p className="text-xs text-gray-400 text-center mt-3">
-                  AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
+
+                <ChatQuickPromptBar
+                  onSelectPrompt={handleSelectPrompt}
+                  selectedPromptId={selectedPromptId}
+                />
+
+                <p className="text-xs text-[var(--gpt-muted)] text-center mt-5">
+                  {t.chat.disclaimer}
                 </p>
               </div>
             </main>
           ) : (
-          <main className="flex-1 overflow-y-auto px-4 md:px-6 py-6 bg-gray-50">
+          <main className="flex-1 overflow-y-auto px-4 md:px-6 py-6 min-h-0">
             <div className="max-w-4xl mx-auto space-y-6">
               {/* Reference toggle */}
               {/* <div className="flex items-center justify-end gap-3">
@@ -1029,101 +1067,82 @@ export default function ModernChatPage() {
               {messages.filter((m) => !(m.role === "reference" && !refToggle)).map((message, index) => (
                 <div
                   key={message.id}
-                  className={`flex items-start gap-3 ${
-                    message.role === "user" ? "flex-row-reverse" : ""
-                  } animate-in fade-in slide-in-from-bottom-4 duration-500`}
+                  className={`w-full py-5 animate-in fade-in slide-in-from-bottom-4 duration-500 ${
+                    message.role === "user" ? "flex justify-end" : ""
+                  }`}
                   style={{ animationDelay: `${index * 50}ms` }}
                 >
-                  <div
-                    className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-md ${
-                      message.role === "user" ? "bg-white border border-gray-200" : "bg-black"
-                    }`}
-                  >
-                    {message.role === "user" ? (
-                      <Image src="/OIP.webp" alt="KAT" width={20} height={20} className="rounded-sm object-contain" />
-                    ) : (
-                      <Bot className="w-5 h-5 text-white" />
-                    )}
-                  </div>
-                  <div className={`flex flex-col gap-1 max-w-[70%] ${message.role === "user" ? "items-end" : "items-start"}`}>
+                  <div className={`w-full ${message.role === "user" ? "max-w-[85%] text-right" : "max-w-none text-left"}`}>
                     {message.role === "reference" ? (
                       refToggle ? (
-                        <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                        <div className="w-full text-left">
                           {Array.isArray(message.content) ? (
                             message.content.map((md: any, idx: number) => (
-                              <details key={idx} className="mb-2">
-                                <summary className="cursor-pointer text-sm font-medium">{md.title || `Tham chiếu #${idx+1}`}</summary>
+                              <details key={idx} className="mb-3">
+                                <summary className="cursor-pointer text-sm font-medium text-neutral-700">{md.title || `Tham chiếu #${idx+1}`}</summary>
                                 <div className="mt-2">
                                   {typeof md.content === "string" ? (
-                                    <div className="prose max-w-none text-sm" dangerouslySetInnerHTML={{ __html: fixLinksInHtml(md.content.replace(/\n/g, "\n\n")) }} />
+                                    <div className="prose max-w-none text-sm text-neutral-800" dangerouslySetInnerHTML={{ __html: fixLinksInHtml(md.content.replace(/\n/g, "\n\n")) }} />
                                   ) : (
-                                    <pre className="text-xs bg-gray-50 p-2 rounded border border-gray-200 overflow-auto">{JSON.stringify(md.content, null, 2)}</pre>
+                                    <pre className="text-xs text-neutral-700 overflow-auto">{JSON.stringify(md.content, null, 2)}</pre>
                                   )}
                                 </div>
                               </details>
                             ))
                           ) : (
-                            <pre className="text-xs bg-gray-50 p-2 rounded border border-gray-200 overflow-auto">{JSON.stringify(message.content, null, 2)}</pre>
+                            <pre className="text-xs text-neutral-700 overflow-auto">{JSON.stringify(message.content, null, 2)}</pre>
                           )}
                         </div>
                       ) : null
                     ) : message.role === "chart" ? (
-                      <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm w-full">
+                      <div className="w-full text-left">
                         <div dangerouslySetInnerHTML={{ __html: String(message.content) }} />
                       </div>
                     ) : (
-                      <div className={`rounded-2xl px-4 py-3 shadow-sm ${message.role === "user" ? "bg-white border border-gray-200 text-gray-800 rounded-tr-md" : "bg-white border border-gray-200 text-gray-800 rounded-tl-md"}`}>
+                      <>
                         {message.role === "assistant" ? (
-                          <div className="text-sm leading-relaxed prose max-w-none" dangerouslySetInnerHTML={{ __html: formatAssistantHtml(String(message.content || "")) }} />
+                          <div className="text-base leading-7 text-neutral-800 [&_strong]:font-semibold [&_p]:mb-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5" dangerouslySetInnerHTML={{ __html: formatAssistantHtml(String(message.content || "")) }} />
                         ) : (
                           typeof message.content === "string" ? (
-                            <p className="text-sm leading-relaxed">{String(message.content)}</p>
+                            <p className="text-base leading-7 text-neutral-800 whitespace-pre-wrap">{String(message.content)}</p>
                           ) : (
-                            <div className="flex flex-col gap-2">
+                            <div className="flex flex-col gap-2 items-end">
                               {Array.isArray(message.content?.images) && message.content.images.length > 0 && (
-                                <div className="flex flex-wrap gap-2">
+                                <div className="flex flex-wrap gap-2 justify-end">
                                   {/* eslint-disable-next-line @next/next/no-img-element */}
                                   {message.content.images.map((src: string, idx: number) => (
                                     <img
                                       key={idx}
                                       src={src}
                                       alt={`attachment-${idx}`}
-                                      className="w-36 h-36 rounded-xl object-cover border border-gray-200"
+                                      className="w-36 h-36 rounded-xl object-cover"
                                     />
                                   ))}
                                 </div>
                               )}
-                              <p className="text-sm leading-relaxed">{String(message.content?.text || "")}</p>
+                              <p className="text-base leading-7 text-neutral-800 whitespace-pre-wrap">{String(message.content?.text || "")}</p>
                             </div>
                           )
                         )}
-                      </div>
+                      </>
                     )}
-                    <span className="text-xs text-gray-400 px-2">
-                      {formatTime(new Date(message.timestamp))}
-                    </span>
                   </div>
                 </div>
               ))}
 
               {/* Typing Indicator: only until first assistant chunk appears */}
               {isTyping && !messages.some((m) => m.id === assistantStreamingIdRef.current && m.role === "assistant") && (
-                <div className="flex items-start gap-3 animate-in fade-in slide-in-from-bottom-4">
-                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-black flex items-center justify-center shadow-md">
-                    <Bot className="w-5 h-5 text-white" />
-                  </div>
-                  <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
-                    <div className="flex gap-1.5">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div
-                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      ></div>
-                      <div
-                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      ></div>
-                    </div>
+                <div className="w-full py-5 animate-in fade-in slide-in-from-bottom-4">
+                  <div className="flex gap-1.5">
+                    <div className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce"></div>
+                    <div
+                      className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.1s" }}
+                    ></div>
+                    <div
+                      className="w-2 h-2 bg-neutral-400 rounded-full animate-bounce"
+                      style={{ animationDelay: "0.2s" }}
+                    ></div>
                   </div>
                 </div>
               )}
@@ -1134,27 +1153,10 @@ export default function ModernChatPage() {
           
           )}
           {messages.length > 0 && (
-            <footer className="bg-white border-t border-gray-200 px-4 md:px-6 py-4 shadow-sm">
-              <div className="max-w-4xl mx-auto">
-                <div className="mb-3">
-                  <button
-                    className="text-xs text-gray-600 hover:text-gray-900 underline"
-                    onClick={() => setShowAdvanced((s) => !s)}
-                  >
-                    {showAdvanced ? "Ẩn hướng dẫn hệ thống" : "Hiển thị hướng dẫn hệ thống"}  
-                  </button>
-                  {showAdvanced && (
-                    <textarea
-                      value={systemInstructionUser}
-                      onChange={(e) => setSystemInstructionUser(e.target.value)}
-                      placeholder="Nhập hướng dẫn hệ thống dành cho User..."
-                      className="mt-2 w-full px-3 py-2 rounded-xl border-2 border-gray-200 focus:border-black focus:outline-none text-sm"
-                      rows={3}
-                    />
-                  )}
-                </div>
+            <footer className="shrink-0 border-t border-[var(--gpt-border)] bg-white px-4 md:px-6 py-4">
+              <div className="max-w-3xl mx-auto">
                 {isUploading && (
-                  <p className="text-xs text-blue-600 mt-2">Đang tải và xử lý tài liệu...</p>
+                  <p className="text-xs text-blue-600 mt-2">{t.chat.processing}</p>
                 )}
                 {uploadSuccess && uploadMessage && (
                   <p className="text-xs text-green-600 mt-2" aria-live="polite">{uploadMessage}</p>
@@ -1189,7 +1191,7 @@ export default function ModernChatPage() {
                                 setImageAnalyses((prev) => prev.filter((_, i) => i !== idx));
                               }}
                               className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-black text-white text-sm flex items-center justify-center"
-                              title="Xóa ảnh"
+                              title={t.chat.removeImage}
                             >
                               ×
                             </button>
@@ -1197,61 +1199,34 @@ export default function ModernChatPage() {
                         ))}
                       </div>
                     )}
-                    <div className="relative">
+                    <div className="relative flex items-center rounded-[1.75rem] border border-[var(--gpt-border)] bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)] px-2 py-1.5">
                       <input
                         ref={inputRef}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onPaste={handlePaste}
                         onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                        placeholder="Nhập tin nhắn của bạn..."
-                        className="w-full px-5 py-3.5 pl-24 pr-14 rounded-2xl border-2 border-gray-200 focus:border-black focus:outline-none transition-all bg-white shadow-sm text-sm placeholder:text-gray-400"
+                        placeholder={t.chat.inputPlaceholder}
+                        className="w-full py-3 pl-14 pr-16 rounded-[1.75rem] border-0 bg-transparent focus:outline-none text-base placeholder:text-neutral-400 text-neutral-900"
                       />
-                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
                         <div className="relative">
                           <button
                             onClick={() => setShowPlusMenu((s) => !s)}
                             disabled={isUploading}
-                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            title={isUploading ? "Đang tải..." : "Thêm"}
+                            className="p-2 rounded-full text-neutral-500 transition-colors hover:bg-[var(--gpt-hover)]"
+                            title={isUploading ? t.chat.uploading : t.chat.add}
                           >
-                            <Plus className="w-5 h-5 text-gray-400" />
+                            <Plus className="w-5 h-5" />
                           </button>
                           {showPlusMenu && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2">
+                            <div className="absolute z-10 bottom-full mb-2 w-56 rounded-xl border border-[var(--gpt-border)] bg-white shadow-lg p-1.5">
                               <button
                                 onClick={handleAttachClick}
-                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 text-sm"
+                                className="w-full text-left px-3 py-2 rounded-lg hover:bg-[var(--gpt-hover)] text-sm"
                               >
-                                Add photos & files
+                                {t.chat.addFiles}
                               </button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="relative">
-                          <button
-                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                            onClick={() => setShowEmojiPicker((s) => !s)}
-                            title="Chèn biểu tượng cảm xúc"
-                          >
-                            <Smile className="w-5 h-5 text-gray-400" />
-                          </button>
-                          {showEmojiPicker && (
-                            <div className="absolute z-10 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-md p-2 grid grid-cols-6 gap-1">
-                              {["😀","😁","😂","😊","😍","😎","🤔","🤗","🙌","👏","👍","🔥","✨","💡","❤️","🥳"].map((emo) => (
-                                <button
-                                  key={emo}
-                                  className="px-2 py-1 hover:bg-gray-50 rounded text-base"
-                                  onClick={() => {
-                                    const base = input.trim();
-                                    const defaultOne = "Phân tích ảnh và cảm nhận hình ảnh này";
-                                    const defaultTwo = "Phân tích ảnh và cảm nhận hai hình ảnh này";
-                                    const withDefault = base !== "" ? base : (attachedFiles.length >= 2 ? defaultTwo : (attachedFiles.length === 1 ? defaultOne : ""));
-                                    setInput((prev) => `${withDefault}${withDefault ? " " : ""}${emo}`);
-                                    setShowEmojiPicker(false);
-                                  }}
-                                >{emo}</button>
-                              ))}
                             </div>
                           )}
                         </div>
@@ -1259,22 +1234,21 @@ export default function ModernChatPage() {
                       <button
                         onClick={handleSendMessage}
                         disabled={!input.trim() && attachedFiles.length === 0}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-black text-white hover:bg-gray-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 flex h-9 w-9 items-center justify-center rounded-full bg-black text-white transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed"
                       >
-                        <Send className="w-5 h-5" />
+                        <Send className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
                   
                 </div>
-                <p className="text-xs text-gray-400 text-center mt-3">
-                  AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
+                <p className="text-xs text-[var(--gpt-muted)] text-center mt-3">
+                  {t.chat.disclaimer}
                 </p>
               </div>
             </footer>
           )}
         </div>
-      </div>
-    </SidebarProvider>
+    </AppShell>
   );
 }

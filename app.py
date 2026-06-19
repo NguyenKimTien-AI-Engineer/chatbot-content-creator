@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import warnings
 import uvicorn
 
-from api import chatbot, document, history, products, image
+from api import chatbot, history, products, image
 
 warnings.filterwarnings("ignore", message="Api key is used with an insecure connection.")
 
@@ -18,10 +18,16 @@ app.add_middleware(
 )
 
 app.include_router(chatbot.router, prefix="/api")
-app.include_router(document.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(products.router, prefix="/api")
 app.include_router(image.router, prefix="/api")
+
+try:
+    from api import document
+
+    app.include_router(document.router, prefix="/api")
+except ImportError as err:
+    print(f"Document API disabled: {err}")
 
 
 @app.get("/")

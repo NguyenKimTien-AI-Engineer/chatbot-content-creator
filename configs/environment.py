@@ -1,48 +1,77 @@
+import os
+
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
+import os
 import pytz
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from mem0 import Memory
 
 from configs import constant
 
 load_dotenv()
 
+GOOGLE_API_KEY = (
+    os.getenv("GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")
+    or ""
+)
+if GOOGLE_API_KEY:
+    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+
+GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+GEMINI_CHAT_MODEL_MINI = os.getenv("GEMINI_CHAT_MODEL_MINI", "gemini-2.5-flash-lite")
+GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
+
 # ================================================
 # EMBEDDINGS
-
-# OpenAI Embeddings
-embeddings_model = OpenAIEmbeddings()
-
-# Local Embeddings
-# model_name = "BAAI/bge-large-en"
-# model_kwargs = {"device": "cpu"}
-# encode_kwargs = {"normalize_embeddings": True}
-# embeddings_model = HuggingFaceBgeEmbeddings(
-#     model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs
-# )
-
-# Embeddings model for chunking
-# chunk_model_name = "sentence-transformers/all-MiniLM-L6-v2"
-# chunk_embeddings_model = SentenceTransformerEmbeddings(model_name=model_name)
-
+embeddings_model = GoogleGenerativeAIEmbeddings(
+    model=GEMINI_EMBEDDING_MODEL,
+    google_api_key=GOOGLE_API_KEY,
+)
 
 # ================================================
 # MEMORY
-config = {
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "host": constant.QDRANT_HOST,
-            "port": constant.QDRANT_PORT,
-        }
-    }
-}
+def _init_memory():
+    if not GOOGLE_API_KEY:
+        return None
 
-# memory = Memory.from_config(config)
-memory = Memory()
+    memory_config = {
+        "llm": {
+            "provider": "gemini",
+            "config": {
+                "model": GEMINI_CHAT_MODEL,
+                "temperature": 0,
+                "api_key": GOOGLE_API_KEY,
+            },
+        },
+        "embedder": {
+            "provider": "gemini",
+            "config": {
+                "model": GEMINI_EMBEDDING_MODEL,
+                "api_key": GOOGLE_API_KEY,
+            },
+        },
+    }
+
+    if constant.QDRANT_HOST:
+        memory_config["vector_store"] = {
+            "provider": "qdrant",
+            "config": {
+                "host": constant.QDRANT_HOST,
+                "port": int(constant.QDRANT_PORT or 6333),
+            },
+        }
+
+    try:
+        return Memory.from_config(memory_config)
+    except Exception as err:
+        print(f"Memory init skipped: {err}")
+        return None
+
+
+memory = _init_memory()
 
 # ================================================
 translator = GoogleTranslator(source='auto', target='en')
@@ -51,54 +80,52 @@ vietnam_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 
 # ================================================
 # LLM
+_llm_kwargs = {"google_api_key": GOOGLE_API_KEY, "temperature": 0}
 
-llm = ChatOpenAI(model="gpt-4.1", temperature=0)
-llm_stream = ChatOpenAI(model="gpt-4.1", temperature=0, streaming=True)
-llm_mini = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
+llm = ChatGoogleGenerativeAI(model=GEMINI_CHAT_MODEL, **_llm_kwargs)
+llm_stream = ChatGoogleGenerativeAI(
+    model=GEMINI_CHAT_MODEL,
+    streaming=True,
+    **_llm_kwargs,
+)
+llm_mini = ChatGoogleGenerativeAI(model=GEMINI_CHAT_MODEL_MINI, **_llm_kwargs)
 
-
-# ================================================
-# VLLM
-
-# llm = VLLMOpenAI(
-#     openai_api_key=_constants.VLLM_TOKEN,
-#     openai_api_base=_constants.VLLM_PATH,
-#     model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-#     temperature=0,
-#     top_p=0.95,
-#     batch_size=128,
-#     max_tokens=2048,
-#     streaming=False,
-# )
-#
-# llm_stream = VLLMOpenAI(
-#     openai_api_key=_constants.VLLM_TOKEN,
-#     openai_api_base=_constants.VLLM_PATH,
-#     model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-#     temperature=0,
-#     top_p=0.95,
-#     batch_size=128,
-#     max_tokens=2048,
-#     frequency_penalty=0.1,
-#     presence_penalty=0.1,
-#     streaming=True,
-# )
+_LEGACY_MODEL_MAP = {
+    "gpt-4.1": GEMINI_CHAT_MODEL,
+    "gpt-4.1-mini": GEMINI_CHAT_MODEL_MINI,
+    "gpt-4o": GEMINI_CHAT_MODEL,
+    "gemini-2.0-flash": GEMINI_CHAT_MODEL,
+    "gemini-2.0-flash-lite": GEMINI_CHAT_MODEL_MINI,
+}
 
 
-# ================================================
-# FUNCTIONS
-def get_llm(model="gpt-4.1", temperature=0, streaming=False):
-    if model == "gpt-4.1-mini":
+def _resolve_model(model: str) -> str:
+    return _LEGACY_MODEL_MAP.get(model, model)
+
+
+def get_llm(model="gemini-2.5-flash", temperature=0, streaming=False):
+    resolved = _resolve_model(model)
+
+    if streaming:
+        return ChatGoogleGenerativeAI(
+            model=resolved,
+            temperature=temperature,
+            streaming=True,
+            google_api_key=GOOGLE_API_KEY,
+        )
+
+    if resolved == GEMINI_CHAT_MODEL_MINI:
         return llm_mini
-    elif model == "gpt-4.1" and streaming:
-        return llm_stream
-    elif model == "gpt-4.1":
+    if resolved == GEMINI_CHAT_MODEL:
         return llm
-    return ChatOpenAI(model=model, temperature=temperature, streaming=streaming)
+
+    return ChatGoogleGenerativeAI(
+        model=resolved,
+        temperature=temperature,
+        streaming=False,
+        google_api_key=GOOGLE_API_KEY,
+    )
 
 
 def get_embedding():
     return embeddings_model
-
-
-

@@ -37,11 +37,9 @@ def save_history(user_id, history_id, session_id, query, answer, feedback, feedb
             json.dump(history, file, indent=4)
 
         try:
-            messages = [{"role": "user", "content": query}, {"role": "assistant", "content": str(answer)}]
-            # if reference:
-            #     messages.append({"role": "assistant", "content": str(reference)})
-
-            environment.memory.add(messages, user_id=session_id)
+            if environment.memory is not None:
+                messages = [{"role": "user", "content": query}, {"role": "assistant", "content": str(answer)}]
+                environment.memory.add(messages, user_id=session_id)
             
         except Exception as e:
             print("Error saving to memory: ", e)
@@ -214,11 +212,15 @@ def get_history_context(user_id, query, session_id):
         #     history_context += f"\n- References to previous question (for reference only when asking previous question): [{str(clean_json_data(item['reference']))}]"
 
     history_context += f"\n\n- User: {query}\n"
-    relevant_memories = environment.memory.search(query=query, user_id=session_id, limit=5)
-    history_context_ = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
-    if history_context_:
-        history_context += "⚙️ Relevant Memories: " + str(history_context_)
-        print("⚙️ Relevant Memories: ", history_context_)
+    if environment.memory is not None:
+        try:
+            relevant_memories = environment.memory.search(query=query, user_id=session_id, limit=5)
+            history_context_ = "\n".join(f"- {entry['memory']}" for entry in relevant_memories["results"])
+            if history_context_:
+                history_context += "⚙️ Relevant Memories: " + str(history_context_)
+                print("⚙️ Relevant Memories: ", history_context_)
+        except Exception as e:
+            print("Error searching memory: ", e)
 
     history_context = clean.clean_special_characters(history_context)
 

@@ -9,7 +9,6 @@ import camelot
 import cv2
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import asyncio

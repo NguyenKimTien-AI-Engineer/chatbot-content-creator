@@ -24,6 +24,7 @@ def chatbot_suggestion(user_id, query, answer, context=""):
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt_suggestion.CHATBOT),
+            ("human", "Câu hỏi: {question}\nCâu trả lời: {answer}"),
         ]
     )
 
