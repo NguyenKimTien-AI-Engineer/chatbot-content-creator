@@ -1,193 +1,379 @@
-# MekongAI Template - Hệ thống RAG Nâng cao
+# KAT Content Studio
 
-Một hệ thống Retrieval-Augmented Generation (RAG) cấp doanh nghiệp được thiết kế để xử lý tài liệu phức tạp và trả lời câu hỏi thông minh trên nhiều loại và kích thước tệp khác nhau.
+An AI-powered content creation platform built for brand teams. It combines a **FastAPI** backend, a **Next.js** web interface, and **Retrieval-Augmented Generation (RAG)** to help teams draft marketing copy, fanpage captions, product descriptions, and conversational answers grounded in uploaded documents and product data.
 
-## 🚀 Các tính năng chính
+Designed for premium leather and lifestyle brands (default configuration: **KAT Leather**), the system is model-agnostic at the infrastructure level and currently runs on **Google Gemini** for chat, vision, and embeddings.
 
-### Xử lý tài liệu nâng cao
-- **Tệp nhỏ (< 10MB)**: Xử lý trực tiếp với chunking được tối ưu hóa và các hoạt động trong bộ nhớ
-- **Tệp lớn (hơn 1000 trang)**: Xử lý streaming với chỉ mục phân cấp để tiết kiệm bộ nhớ
-- **Phân tích nhiều tài liệu**: Xử lý song song với chỉ mục hợp nhất và tổng hợp thông tin từ nhiều tài liệu
-- **Hỗ trợ định dạng**: PDF, DOCX, TXT, HTML, CSV, XLSX với khả năng OCR
+---
 
-### Trả lời câu hỏi thông minh
-- **Tìm kiếm ngữ nghĩa**: Truy xuất dựa trên ngữ cảnh bằng cách sử dụng các phương pháp kết hợp (ngữ nghĩa + từ khóa + đồ thị)
-- **Tìm kiếm toàn văn bản chính xác**: Tìm kiếm đa phương pháp bao gồm khớp chính xác, tìm kiếm mờ và các mẫu regex
-- **Tác vụ tổng hợp**: Đếm và phân tích thống kê nâng cao với xác thực đa phương pháp
-- **Tổng hợp thông tin từ nhiều tài liệu**: Tổng hợp thông tin từ nhiều tài liệu với xác minh tính nhất quán
+## Table of Contents
 
-### Tính năng doanh nghiệp
-- **Kiến trúc có thể mở rộng**: Xử lý phân tán cho các bộ sưu tập tài liệu lớn
-- **Hệ thống bộ nhớ đệm**: Bộ nhớ đệm đa lớp để có hiệu suất tối ưu
-- **Phục hồi lỗi**: Xử lý lỗi mạnh mẽ với các cơ chế dự phòng
-- **Giám sát hiệu suất**: Các chỉ số và tối ưu hóa theo thời gian thực
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Running the Application](#running-the-application)
+- [Project Structure](#project-structure)
+- [API Overview](#api-overview)
+- [Optional Services](#optional-services)
+- [Development](#development)
+- [Documentation](#documentation)
+- [License & Attribution](#license--attribution)
 
-## 📚 Tài liệu
+---
 
-- **[Hướng dẫn chi tiết các chức năng](enhanced_system/docs/DETAILED_FUNCTIONS.md)**: Tài liệu kỹ thuật toàn diện về tất cả các thành phần của hệ thống
-- **[Tối ưu hóa hiệu suất](enhanced_system/docs/PERFORMANCE_OPTIMIZATION.md)**: Cấu hình nâng cao và các phương pháp hay nhất về mở rộng quy mô
-- **[Cấu trúc dự án](resources/docs/project_structure.md)**: Tổng quan đầy đủ về kiến trúc hệ thống
+## Overview
 
-## 🛠 Cài đặt & Thiết lập
+KAT Content Studio is an end-to-end chatbot and content assistant that:
 
-### Sao chép dự án
-```shell
-git clone https://github.com/mekongai/mekongai-template.git
+- Generates on-brand marketing and social content through customizable prompts
+- Retrieves relevant context from vector stores (Qdrant) and product catalogs (MongoDB)
+- Streams responses token-by-token for a responsive chat experience
+- Persists conversation history for multi-session workflows
+- Supports document ingestion (PDF, DOCX, TXT, and more) for knowledge-base Q&A
+
+The application replaces the legacy Streamlit UI with a modern, ChatGPT-style interface featuring sidebar navigation, chat history, bilingual support (English / Vietnamese), and a centralized settings panel.
+
+---
+
+## Key Features
+
+### Content & Chat
+
+- **Custom prompt chatbot** with brand tone, checklist, and template-driven output
+- **Server-Sent Events (SSE) streaming** for real-time token delivery
+- **Suggested prompts** for marketing, captions, product advice, and strategy
+- **Image analysis** via Gemini Vision (upload images in chat)
+- **Chart generation** when users request visual summaries
+
+### Knowledge & Retrieval
+
+- **Semantic search** over Qdrant vector collections
+- **Multi-format document processing** with OCR support (PDF, DOCX, TXT, HTML, CSV, XLSX)
+- **Product-aware responses** with MongoDB-backed catalog lookup
+- **Reference citations** linked to retrieved document chunks
+
+### Web Application
+
+- **Next.js 15** frontend with responsive layout
+- **Chat history sidebar** synced with MongoDB conversations API
+- **Settings hub** for models, API endpoints, brand profile, and chat behavior
+- **Internationalization (i18n)** — English and Vietnamese
+
+### Platform
+
+- **FastAPI** REST API with CORS enabled
+- **Modular backend** — chatbot, history, products, documents, and image routes
+- **Docker-ready** deployment configuration
+
+---
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                     Next.js UI  (:3000)                     │
+│   Chat · Settings · Home · Sidebar History · i18n           │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP / SSE (proxied /api/*)
+┌──────────────────────────▼──────────────────────────────────┐
+│                   FastAPI Backend  (:1979)                  │
+│  chatbot · history · products · document · image            │
+└──────┬──────────────┬──────────────┬─────────────────────────┘
+       │              │              │
+       ▼              ▼              ▼
+  Google Gemini   Qdrant         MongoDB
+  (chat/embed)   (vectors)    (history/products)
+```
+
+During local development, the Next.js dev server proxies `/api/*` requests to the FastAPI backend on port `1979`.
+
+---
+
+## Tech Stack
+
+| Layer | Technologies |
+|-------|--------------|
+| **Frontend** | Next.js 15, React 19, TypeScript, Tailwind CSS, Radix UI, Zustand |
+| **Backend** | Python 3.10+, FastAPI, Uvicorn, LangChain, LangChain Google GenAI |
+| **AI** | Google Gemini (chat, mini, embedding, vision models) |
+| **Vector DB** | Qdrant |
+| **Document / App DB** | MongoDB |
+| **Optional** | MySQL, Neo4j, AWS S3, Tesseract OCR |
+
+---
+
+## Prerequisites
+
+- **Python** 3.10 or newer
+- **Node.js** 18+ and npm
+- **Google Gemini API key** ([Google AI Studio](https://aistudio.google.com/))
+- **Qdrant** (recommended for RAG) — local Docker or remote instance
+- **MongoDB** (recommended for chat history and products)
+
+### System dependencies (document processing)
+
+For full document ingestion and OCR capabilities:
+
+```bash
+sudo apt-get update && sudo apt-get install -y \
+  build-essential tesseract-ocr libtesseract-dev poppler-utils \
+  ffmpeg libsm6 libxext6
 ```
 
 ---
 
-## 🎯 Các trường hợp sử dụng nâng cao
+## Quick Start
 
-### Hỏi và đáp trong các tệp nhỏ
-**Nguyên tắc**: Tải trực tiếp với chunking đơn giản
-- Toàn bộ tài liệu được tải vào bộ nhớ để truy cập nhanh
-- Các đoạn có kích thước cố định (1000 token) với phần chồng lấp (200 token)
-- Các hoạt động vector trong bộ nhớ để tìm kiếm tức thì
-- Các mô hình có độ chính xác cao hơn do các ràng buộc tính toán thấp hơn
-
-**Ví dụ**: "Kết luận chính trong bài báo nghiên cứu dài 50 trang này là gì?"
-
-### Hỏi và đáp trong các tệp lớn (hơn 1000 trang)
-**Nguyên tắc**: Xử lý streaming với chỉ mục phân cấp
-- Nội dung được truyền theo lô để quản lý bộ nhớ
-- Cấu trúc tóm tắt đa cấp (3 cấp phân cấp)
-- Tìm kiếm lũy tiến: tóm tắt → các phần → các đoạn chi tiết
-- Tối ưu hóa ngữ cảnh với tóm tắt động
-
-**Ví dụ**: "Tìm tất cả các đề cập đến tác động của biến đổi khí hậu trong báo cáo môi trường dài 2000 trang này."
-
-### Hỏi và đáp trên nhiều tệp
-**Nguyên tắc**: Xử lý song song với tổng hợp thông tin từ nhiều tài liệu
-- Các tài liệu được xử lý đồng thời với chỉ mục hợp nhất
-- Ánh xạ mối quan hệ giữa các tài liệu
-- Tổng hợp thông tin với xác minh tính nhất quán
-- Giải quyết xung đột thông qua trọng số bằng chứng
-
-**Ví dụ**: "So sánh các dự báo kinh tế trên tất cả các báo cáo hàng quý từ năm 2020-2023."
-
-### Tìm kiếm toàn văn bản chính xác
-**Nguyên tắc**: Tìm kiếm đa phương pháp với xác thực
-- **Khớp chính xác**: Thuật toán Boyer-Moore cho các cụm từ nguyên văn
-- **Khớp mờ**: Khoảng cách Levenshtein cho các lỗi chính tả/biến thể
-- **Các mẫu Regex**: Khớp mẫu phức tạp
-- **Xác minh ngữ nghĩa**: Xác thực kết quả dựa trên ngữ cảnh
-
-**Ví dụ**: "Tìm tất cả các đề cập chính xác về 'mục tiêu phát triển bền vững' và các biến thể của chúng."
-
-### Tổng hợp và đếm
-**Nguyên tắc**: Xác thực đa phương pháp với tính điểm tin cậy
-- **Nhận dạng thực thể có tên**: Trích xuất thực thể do AI cung cấp
-- **Khớp mẫu**: Đếm dựa trên regex với xác thực ngữ cảnh
-- **Đếm dựa trên ML**: Hiểu theo ngữ cảnh các đề cập
-- **Xác thực chéo**: Các kết quả được đối chiếu bằng cách sử dụng trọng số tin cậy
-
-**Ví dụ**: "Có bao nhiêu con gà được đề cập trong tất cả các tài liệu nông nghiệp?"
-
-**Quy trình**:
-1. Trích xuất các thực thể bằng 4 phương pháp khác nhau
-2. Xác thực từng đề cập trong ngữ cảnh (tránh các phủ định, giả định)
-3. Xác thực chéo các kết quả và tính điểm tin cậy
-4. Xử lý các trường hợp không rõ ràng và cung cấp phân tích chi tiết
-
----
-
-## QDRANT - DOCKER
+### 1. Clone the repository
 
 ```bash
-# Đầu tiên, tải xuống hình ảnh Qdrant mới nhất từ Dockerhub:
+git clone https://github.com/NguyenKimTien-AI-Engineer/chatbot-content-creator.git
+cd chatbot-content-creator
+```
+
+### 2. Backend setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+pip install -r requirements_full.txt
+pip install 'uvicorn[standard]'
+
+cp .env.example .env
+# Edit .env and set at minimum GEMINI_API_KEY
+```
+
+### 3. Frontend setup
+
+```bash
+cd ui
+npm install
+cd ..
+```
+
+### 4. Start Qdrant (optional but recommended)
+
+```bash
 docker pull qdrant/qdrant
 
-# Sau đó, chạy dịch vụ:
 docker run -p 6333:6333 -p 6334:6334 \
-    -v $(pwd)/qdrant_storage:/qdrant/storage:z \
-    qdrant/qdrant
+  -v "$(pwd)/qdrant_storage:/qdrant/storage" \
+  qdrant/qdrant
+```
+
+### 5. Run the services
+
+**Terminal 1 — API**
+
+```bash
+source .venv/bin/activate
+python app.py
+```
+
+**Terminal 2 — UI**
+
+```bash
+cd ui
+npm run dev
+```
+
+Open **http://localhost:3000** in your browser. The API is available at **http://localhost:1979**.
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env` and configure the variables below.
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `SERVER_ADDRESS` | Public API base URL (default: `http://localhost:1979`) |
+
+### AI models
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_CHAT_MODEL` | `gemini-2.5-flash` | Primary chat model |
+| `GEMINI_CHAT_MODEL_MINI` | `gemini-2.5-flash-lite` | Lightweight / fallback model |
+| `GEMINI_EMBEDDING_MODEL` | `models/gemini-embedding-001` | Text embeddings |
+| `GEMINI_VISION_MODEL` | `gemini-2.5-flash` | Image understanding |
+
+### Vector search (Qdrant)
+
+| Variable | Description |
+|----------|-------------|
+| `QDRANT_HOST` | Qdrant host |
+| `QDRANT_PORT` | Qdrant port (default: `6333`) |
+| `QDRANT_SERVER` | Full Qdrant URL, e.g. `http://localhost:6333` |
+| `QDRANT_API_KEY` | API key (if using Qdrant Cloud) |
+
+### Databases
+
+| Variable | Description |
+|----------|-------------|
+| `MONGODB_HOST`, `MONGODB_PORT`, `MONGODB_DATABASE`, … | MongoDB connection for chat history and products |
+| `MYSQL_DB_*` | Optional MySQL integration |
+
+> **Security:** Never commit `.env` or API keys to version control.
+
+---
+
+## Running the Application
+
+### Development
+
+```bash
+# Backend
+python app.py
+
+# Frontend
+cd ui && npm run dev
+```
+
+### Production (UI)
+
+```bash
+cd ui
+npm run build
+npm run start:prod
+```
+
+Ensure `NEXT_PUBLIC_SERVER_HOST` and `NEXT_PUBLIC_API_PORT` are set so the UI can reach the API in production, or place both services behind a reverse proxy.
+
+### Docker
+
+Build and run the backend container:
+
+```bash
+docker build -t kat-content-studio:latest .
+
+docker run -d -p 1979:1979 \
+  --name kat-content-studio \
+  -e GEMINI_API_KEY="your-key" \
+  -e QDRANT_SERVER="http://host.docker.internal:6333" \
+  kat-content-studio:latest
 ```
 
 ---
 
-### Cài đặt thư viện
+## Project Structure
 
-```sh
-sudo apt-get update && apt-get install -y \
-    build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libsqlite3-dev ffmpeg libsm6 libxext6 libbz2-dev \
-    libssl-dev libreadline-dev libffi-dev wget curl \
-    python3-venv nano tesseract-ocr libtesseract-dev poppler-utils gfortran libopenblas-dev liblapack-dev && \
-    rm -rf /var/lib/apt/lists/*
-    
-python3.10 -m venv venv
-source venv/bin/activate                # venv\Scripts\activate.bat
-pip3.10 install -r requirements.txt --use-deprecated=legacy-resolver
-
-pip3.10 install 'uvicorn[standard]'
-pip3.10 install --upgrade camelot-py[cv]
-pip3.10 install --upgrade tiktoken
-
-cp .env.examples .env
-
-wget https://github.com/tesseract-ocr/tessdata/raw/main/vie.traineddata
-sudo mv -v vie.traineddata /usr/share/tesseract-ocr/4.00/tessdata/
-
-ulimit -n 102400
-
-pip3.10 install onnx==1.16.1 onnxruntime==1.19.2
-pip3.10 install PyPDF2==2.12.1
-
-python3.10 -m spacy download en_core_web_sm
-python3.10 -m spacy download vi_core_news_sm
+```text
+chatbot-content-creator/
+├── api/                    # FastAPI route modules
+├── bot/v1/                 # Chatbot logic and prompt orchestration
+├── configs/                # Constants, environment, and prompt templates
+├── controllers/            # Business logic (RAG, documents, databases, LLM)
+├── resources/              # Data, logs, docs, and static assets
+├── tests/                  # Backend tests
+├── ui/                     # Next.js frontend application
+│   ├── app/                # App Router pages (chat, settings, home)
+│   ├── components/         # UI and layout components
+│   ├── lib/                # API client, i18n, utilities
+│   └── store/              # Zustand state (settings, chat sessions)
+├── app.py                  # FastAPI entry point
+├── .env.example            # Environment template
+├── requirements_full.txt   # Python dependencies
+└── Dockerfile              # Container build definition
 ```
 
 ---
 
-### API
+## API Overview
 
-```bash
-# Chatbot API
-python3.10 app.py
+Base URL: `http://localhost:1979/api`
 
-# Streamlit UI
-streamlit run webui.py --server.enableCORS=false --server.enableXsrfProtection=false
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chatbot-custom-prompt` | POST | Custom-prompt chat (JSON response) |
+| `/v1/chatbot-custom-prompt-stream` | POST | Custom-prompt chat (SSE stream) |
+| `/v1/chatbot-reference` | POST | Reference-grounded chat |
+| `/v1/chatbot-chart-stream` | POST | Chart-oriented chat stream |
+| `/v1/analyze-image` | POST | Image analysis |
+| `/v1/histories/list` | POST | List chat conversations |
+| `/v1/histories/get` | POST | Fetch a conversation |
+| `/v1/histories/create` | POST | Create a conversation |
+| `/v1/histories/delete` | POST | Delete a conversation |
+| `/v1/upload-files` | POST | Upload documents to Qdrant *(if document module enabled)* |
+
+Interactive API docs: **http://localhost:1979/docs**
 
 ---
 
-## DOCKER
+## Optional Services
 
-### Kéo hình ảnh từ Docker Hub
+| Service | Purpose |
+|---------|---------|
+| **Qdrant** | Vector storage and semantic retrieval for RAG |
+| **MongoDB** | Persistent chat history and product catalog |
+| **Tesseract** | OCR for scanned PDFs and images |
+| **AWS S3** | Object storage for media assets |
+| **Neo4j** | Graph-based knowledge (optional integration) |
+
+The chatbot works without Qdrant and MongoDB, but document retrieval, product lookup, and sidebar history will be limited or unavailable.
+
+---
+
+## Development
+
+### Frontend tests
+
 ```bash
-docker pull mekongaidnhk/mekongai-template:latest
-
-docker run -d -p 8066:8066 \
-  --name mekongai-template \
-  -e PORT=1979 \
-  -e USER_AGENT="MEKONGAI" \
-  -e SERVER_ADDRESS="http://<host>:8066" \
-  -e OPENAI_API_BASE_URL="https://api.openai.com/v1" \
-  -e OPENAI_API_KEY="<openai-api-key>" \
-  -e QDRANT_HOST="<host>" \
-  -e QDRANT_PORT="6333" \
-  -e QDRANT_SERVER="http://<host>:6333" \
-  -e QDRANT_API_KEY="<qdrant-api-key>" \
-  mekongaidnhk/mekongai-template:latest
-``` 
-
-### hoặc Xây dựng hình ảnh Docker
-```bash
-# Xây dựng hình ảnh Docker
-sudo docker build --no-cache -t mekongaidnhk/mekongai-template:latest .
-
-# Đẩy lên Docker Hub
-sudo docker tag mekongaidnhk/mekongai-template mekongaidnhk/mekongai-template:latest
-sudo docker push mekongaidnhk/mekongai-template:latest
-
-# Xem nhật ký container
-docker logs -f mekongai-template
-
-# Dừng và xóa container
-docker stop mekongai-template
-docker rm -f mekongai-template
-
-# Xem các tệp trong container
-docker exec -it mekongai-template /bin/sh
-docker restart mekongai-template
+cd ui
+npm run test
 ```
+
+### Backend tests
+
+```bash
+source .venv/bin/activate
+pytest tests/
+```
+
+### Prompt customization
+
+Brand prompts and output templates live under:
+
+```text
+configs/prompts/custom/
+├── system.py
+├── checklist.py
+├── template_content.py
+└── prompt_chatbot_custom.py
+```
+
+Adjust these files to change tone, structure, and compliance rules without modifying core application code.
+
+### UI settings
+
+Runtime preferences (models, API host, brand name, streaming toggle) are managed in the **Settings** page and persisted in the browser via Zustand.
+
+---
+
+## Documentation
+
+Additional technical references:
+
+- [Detailed system functions](enhanced_system/docs/DETAILED_FUNCTIONS.md)
+- [Performance optimization](enhanced_system/docs/PERFORMANCE_OPTIMIZATION.md)
+- [Project structure (legacy)](resources/docs/project_structure.md)
+
+---
+
+## License & Attribution
+
+This project builds on the MekongAI RAG template architecture and has been extended for brand content creation workflows.
+
+For questions, issues, or contributions, please open an issue or pull request on the repository.
+
+---
+
+**KAT Content Studio** — AI-assisted content creation for modern brand teams.
